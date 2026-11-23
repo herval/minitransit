@@ -25,6 +25,12 @@ npm run dev
 
 Browser modules are served directly. The build validates the required assets. Space pauses movement, **L** toggles names, **N** toggles night mode, and Escape closes details.
 
+## Rendering and response performance
+
+The map creates SVG elements for the active network and visible stops and vehicles. Track segments share one SVG path per route. Stop names use cached measurements and placement; live clock ticks do not rerun the stop layout. Pan and zoom events are combined into animation frames, with lane geometry rebuilt after the zoom gesture settles. Reported locations are resolved once per update, and estimated motion is capped at 30 updates per second. Dense bus-stop markers thin out at overview scales and appear with zoom or search.
+
+`/api/live` sends compact motion windows, delay summaries and gap cues. Unchanged snapshots return HTTP 304; `X-Server-Time` keeps the browser clock aligned even when the body is unchanged. Full stop lists and station departures load only when their details are opened. These responses reuse the same upstream cache, so opening details does not increase 511 polling frequency. See [PERFORMANCE.md](PERFORMANCE.md) for the local comparison and validation method.
+
 ## Live data
 
 [511 Open Data](https://511.org/open-data/transit) supplies the consolidated regional GTFS schedule, trip updates, vehicle positions and service alerts. All networks and visitors share the same server caches: trip updates and positions refresh every 150 seconds, and alerts every 600 seconds. This uses about 54 upstream requests per hour during continuous operation on one server, within the default token budget of 60. Starts and schedule refreshes also make requests.
@@ -43,7 +49,7 @@ The schematic rotates geography and simplifies paths into straight and diagonal 
 
 ## Server and deployment
 
-`server.mjs` serves public assets, `/api/network` for stops and map geometry, `/api/live` for live vehicles, departures and alerts, and `/healthz` for an independent health check. Set `PORT` (default `8080`), `HOST` (default `0.0.0.0`), and `BART_511_API_KEY` in the runtime environment.
+`server.mjs` serves public assets, `/api/network` for stops and map geometry, `/api/live` for the compact map snapshot (`format: "map-v1"`), `/api/train?id=...` for a selected vehicle's complete stop list, `/api/station?id=...` for departures at a selected stop, and `/healthz` for an independent health check. Encode detail IDs as URL query values. Set `PORT` (default `8080`), `HOST` (default `0.0.0.0`), and `BART_511_API_KEY` in the runtime environment.
 
 The Dockerfile runs as an unprivileged user. `fly.toml` configures HTTPS, health checks, automatic stop/start, and one shared-CPU Machine with 512 MB RAM in San Jose. The larger memory allocation allows live regional data and background schedule refreshes to coexist. No database or persistent volume is required.
 

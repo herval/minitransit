@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {gzip} from 'node:zlib';
 import {promisify} from 'node:util';
 import {getRegionalSnapshot,getLiveNetwork} from './lib/regional-live.mjs';
+import {compactSnapshot,stableSnapshot} from './lib/map-data.mjs';
 
 const root=fileURLToPath(new URL('.',import.meta.url)),compress=promisify(gzip);
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.json':'application/json; charset=utf-8'};
@@ -38,24 +39,46 @@ async function loadAssets(){
 // Dependencies are injectable so HTTP behavior can be verified without network calls.
 export async function createAppServer({apiKey=process.env.BART_511_API_KEY,snapshot=getRegionalSnapshot,network=getLiveNetwork}={}){
   const assets=await loadAssets();
+  let mapCache;
+  async function json(response,request,value,status=200,{validator=false}={}){
+    const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':validator?'private, no-cache':'no-store','Vary':'Accept-Encoding'};
+    if(value.serverTime!=null)headers['X-Server-Time']=String(value.serverTime);
+    if(validator){headers.ETag='W/"'+createHash('sha256').update(JSON.stringify(stableSnapshot(value))).digest('hex')+'"';if(request.headers['if-none-match']===headers.ETag){response.writeHead(304,headers);response.end();return;}}
+    const body=Buffer.from(JSON.stringify(value)),useGzip=acceptsGzip(request.headers['accept-encoding'])&&body.length>1024;
+    const bytes=useGzip?await compress(body):body;
+    response.writeHead(status,{...headers,'Content-Length':bytes.length,...(useGzip?{'Content-Encoding':'gzip'}:{})});response.end(request.method==='HEAD'?undefined:bytes);
+  }
   return createServer(async(request,response)=>{
     response.setHeader('X-Content-Type-Options','nosniff');
     response.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     if(request.method!=='GET'&&request.method!=='HEAD'){
       response.writeHead(405,{'Allow':'GET, HEAD','Cache-Control':'no-store'});response.end();return;
     }
-    let path;
-    try {path=decodeURIComponent(new URL(request.url,'http://localhost').pathname);}catch{response.writeHead(400);response.end();return;}
+    let path,url;
+    try {url=new URL(request.url,'http://localhost');path=decodeURIComponent(url.pathname);}catch{response.writeHead(400);response.end();return;}
     const head=request.method==='HEAD';
     if(path==='/healthz'){
       response.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});response.end(head?undefined:'{"ok":true}');return;
     }
-    if(path==='/api/live'||path==='/api/network'){
+    if(['/api/live','/api/network','/api/train','/api/station'].includes(path)){
       try{
-        const value=await (path==='/api/network'?network:snapshot)({apiKey});
-        const body=Buffer.from(JSON.stringify(value)),useGzip=acceptsGzip(request.headers['accept-encoding'])&&body.length>1024;
-        const bytes=useGzip?await compress(body):body;
-        response.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Vary':'Accept-Encoding','Content-Length':bytes.length,...(useGzip?{'Content-Encoding':'gzip'}:{})});response.end(head?undefined:bytes);
+        if(path==='/api/network'){await json(response,request,await network({apiKey}),200,{validator:true});return;}
+        const full=await snapshot({apiKey});
+        if(path==='/api/train'){
+          const train=full.trips.trains.find(t=>t.id===url.searchParams.get('id'));
+          await json(response,request,train?{serverTime:full.serverTime,train}:{error:'Trip no longer reported'},train?200:404);return;
+        }
+        if(path==='/api/station'){
+          const id=url.searchParams.get('id'),data=await network({apiKey}),station=Object.hasOwn(data.stations,id)?data.stations[id]:null;
+          await json(response,request,station&&station.public!==false?{serverTime:full.serverTime,station:id,departures:full.trips.departures[id]||[]}:{error:'Unknown stop'},station&&station.public!==false?200:404);return;
+        }
+        let value=full;
+        if(full.regional){
+          const data=await network({apiKey});
+          if(mapCache?.trips!==full.trips||mapCache?.alerts!==full.alerts||mapCache?.network!==data){mapCache={trips:full.trips,alerts:full.alerts,network:data,value:compactSnapshot(full,data)};}
+          value={...mapCache.value,serverTime:full.serverTime};
+        }
+        await json(response,request,value,200,{validator:full.regional===true});
       }catch{
         const body=JSON.stringify({error:'The regional transit feed could not be loaded. Retrying shortly.',serverTime:Date.now()});
         response.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});response.end(head?undefined:body);

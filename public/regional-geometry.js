@@ -1,5 +1,6 @@
 import {project,REGIONAL_MAX_AGE} from './networks.js';
 import {sourceState,inferSegment,upcomingStops} from './model.js';
+import {motionAt} from './map-motion.js';
 
 export function metrics(points){
  const distances=[0];for(let i=1;i<points.length;i++)distances.push(distances.at(-1)+Math.hypot(points[i].x-points[i-1].x,points[i].y-points[i-1].y));
@@ -30,13 +31,13 @@ function offsetPath(points,offset){
  });
  return[points[0],...shifted,points.at(-1)];
 }
-export function createMapGeometry(network,scale=1){
+export function createMapGeometry(network,scale=1,{lines:enabledLines}={}){
  const shapes=[],direct=new Map(),adjacency=new Map(),cache=new Map();
  const key=(a,b,line)=>[a,b].sort().join('|')+'|'+line;
  function neighbor(line,a,b){if(!adjacency.has(line))adjacency.set(line,new Map());const graph=adjacency.get(line);if(!graph.has(a))graph.set(a,[]);graph.get(a).push(b);}
  for(const edge of network.edges){
   const a=network.stations[edge.a],b=network.stations[edge.b];if(!a||!b)continue;
-  const lines=[...edge.lines].sort();
+  const lines=edge.lines.filter(id=>!enabledLines||enabledLines.has(id)).sort();
   lines.forEach((id,index)=>{
    const line=network.lines[id],base=octilinear(a,b,line.mode==='ferry'),offset=(index-(lines.length-1)/2)*3/scale;
    const path=metrics(offsetPath(base,offset));
@@ -66,6 +67,11 @@ export function createMapGeometry(network,scale=1){
 }
 
 export function locateTrain(train,network,geometry,now){
+ if(train.mapMotion){
+  const motion=motionAt(train,now);if(!motion)return null;
+  const position=pointAt(geometry.path(train.line,motion.from,motion.to),motion.progress);
+  return position?{...motion,...position}:null;
+ }
  const fix=train.position;
  if(fix&&sourceState(fix.timestamp,now,REGIONAL_MAX_AGE)==='live'){
   const point=project(fix.lat,fix.lon,network.projectionAngle??25);let closest=null;

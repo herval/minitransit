@@ -91,7 +91,7 @@ export function upcomingStops(train, now) {
 }
 
 export function trainDelay(train,now) {
-  const next=upcomingStops(train,now)[0];
+  const next=upcomingStops(train.delayTimeline?{...train,stops:train.delayTimeline}:train,now)[0];
   return next && Number.isFinite(next.delaySeconds) ? {station:next.station,seconds:next.delaySeconds,uncertainty:next.uncertaintySeconds} : null;
 }
 
