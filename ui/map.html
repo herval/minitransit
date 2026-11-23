@@ -1,78 +1,40 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="description" content="The BART network, in motion. Live departures and service alerts on a quiet, game-inspired map. Train positions are estimated.">
-  <meta name="theme-color" content="#faf9f6">
-  <title>Bay, in motion — Live BART</title>
-  <link rel="icon" href="/favicon.svg">
-  <script src="/theme.js"></script>
-  <link rel="stylesheet" href="/map.css">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Seven Bay Area transit networks, in motion. Live trains, trams, ferries and buses on a game-inspired map.">
+<meta name="theme-color" content="#faf9f6"><title>MiniTransit — Bay Area, in motion</title>
+<link rel="icon" href="/favicon.svg"><script src="/theme.js"></script><link rel="stylesheet" href="/map.css">
 </head>
 <body class="labels-on">
-<main class="game" aria-label="Live BART map">
-  <svg class="map-svg" id="map" viewBox="-60 -150 1280 1120" role="group" aria-label="BART network. Select a station for departures. Drag or pinch to explore.">
-    <title>The Bay, in motion</title>
-    <desc>An independent BART schematic with live departures and estimated train movement. Use the station finder to browse all 50 stations.</desc>
-    <path class="water" d="M370 -3000 L370 -30 C350 70 398 124 433 180 C463 230 445 310 408 365 C377 400 332 430 321 492 C308 562 349 615 414 680 C478 747 562 817 636 930 L636 4000 L782 4000 L782 930 C705 833 635 784 571 711 C505 636 486 579 479 513 C469 450 505 390 526 334 C549 269 530 218 506 160 C477 95 489 30 515 -30 L515 -3000Z"/>
-    <g id="routes"></g><g id="alert-overlay"></g><g id="stations"></g><g id="trains"></g><g id="map-cues" aria-label="Live delay and service gap indicators"></g>
-  </svg>
-  <p class="phone-map-hint">Drag map · pinch to zoom</p>
-  <header class="hud">
-    <div class="city"><div class="city-title"><h1>BART</h1><button class="icon-button theme-toggle" id="theme" aria-label="Switch to night mode" aria-pressed="false" title="Night mode (N)"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="moon-symbol" d="M20 15.3A8.5 8.5 0 0 1 8.7 4 8.5 8.5 0 1 0 20 15.3Z"/><g class="sun-symbol"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg></button></div><p>Bay, in motion.</p></div>
-    <div class="live-hud">
-      <button class="connection" id="connection" aria-controls="inspector" aria-expanded="false" title="Open service and data status"><span class="dot" id="connection-dot" aria-hidden="true"></span><span id="connection-text">Connecting</span></button>
-      <div class="time-display"><svg class="dial" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17"/><path id="hour-hand" d="M20 20V11"/><path id="minute-hand" d="M20 20V6"/><circle class="dial-center" cx="20" cy="20" r="1.8"/></svg><div><time class="clock">--:--</time><span class="time-zone">San Francisco</span></div></div>
-      <div class="train-count" title="Drawable train estimates at the latest feed refresh"><svg viewBox="0 0 26 16" aria-hidden="true"><rect x="2" y="2" width="22" height="12" rx="2"/><path d="M17 5h3v6h-3z"/></svg><span id="train-count">—</span><span class="sr-only">estimated trains at the latest refresh</span></div>
-    </div>
-  </header>
-  <div class="left-controls controls" aria-label="Map controls">
-    <button class="icon-button pause" id="pause" aria-label="Pause train motion" aria-pressed="false" title="Pause motion (Space)"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="pause-symbol" d="M8 5v14M16 5v14"/><path class="play-symbol" d="m8 5 11 7-11 7Z"/></svg></button>
-    <button class="icon-button" id="labels" aria-label="Hide station names" aria-pressed="true" title="Station names (L)"><span aria-hidden="true">Aa</span></button>
-    <button class="icon-button" id="zoom-in" aria-label="Zoom in" title="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
-    <button class="icon-button" id="zoom-out" aria-label="Zoom out" title="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-  </div>
-  <footer class="route-palette">
-    <nav class="line-tabs" aria-label="Focus a BART line">
-      <button class="line-tab all-lines" data-line="all" aria-label="Show all lines" aria-pressed="true" title="All lines"><svg viewBox="0 0 30 30" aria-hidden="true"><path d="M7 5v20" stroke="var(--yellow)"/><path d="M11 5v20" stroke="var(--red)"/><path d="M15 5v20" stroke="var(--blue)"/><path d="M19 5v20" stroke="var(--green)"/><path d="M23 5v20" stroke="var(--orange)"/></svg><span class="route-tooltip">All lines</span></button>
-      <button class="line-tab" data-line="yellow" aria-label="Focus Yellow line" aria-pressed="false" style="--route:var(--yellow)"><span class="swatch"></span><span class="route-tooltip">Yellow</span></button>
-      <button class="line-tab" data-line="red" aria-label="Focus Red line" aria-pressed="false" style="--route:var(--red)"><span class="swatch"></span><span class="route-tooltip">Red</span></button>
-      <button class="line-tab" data-line="blue" aria-label="Focus Blue line" aria-pressed="false" style="--route:var(--blue)"><span class="swatch"></span><span class="route-tooltip">Blue</span></button>
-      <button class="line-tab" data-line="green" aria-label="Focus Green line" aria-pressed="false" style="--route:var(--green)"><span class="swatch"></span><span class="route-tooltip">Green</span></button>
-      <button class="line-tab" data-line="orange" aria-label="Focus Orange line" aria-pressed="false" style="--route:var(--orange)"><span class="swatch"></span><span class="route-tooltip">Orange</span></button>
-    </nav>
-    <p id="line-caption">All lines</p>
-  </footer>
-  <div class="right-controls controls" aria-label="Explore and service status">
-    <button class="icon-button" id="reset" aria-label="Fit the whole network" title="Fit network"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5"/></svg></button>
-    <button class="icon-button" id="station-finder" aria-label="Find a station" aria-controls="inspector" aria-expanded="false" title="Find a station"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button>
-    <button class="icon-button service-button" id="service" aria-label="Service and data status" aria-controls="inspector" aria-expanded="false" title="Service and data"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle class="info-dot" cx="12" cy="7" r="1"/></svg><span class="advisory-count" id="advisory-count" hidden></span></button>
-  </div>
-  <div class="map-caption"><span id="map-key-text">Estimated train positions</span><span class="cue-key">Outlines show delays · clocks show gaps</span><span class="gesture-hint">Tap a station · drag to explore</span></div>
-  <aside class="inspector" id="inspector" aria-labelledby="panel-title" hidden>
-    <div class="panel-header"><h2 id="panel-title">At the platform</h2><button class="icon-button" id="close-panel" aria-label="Close details" title="Close (Esc)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
-    <section id="station-panel">
-      <div class="mini-train" id="train-card" hidden><span class="eyebrow">Selected train · estimated</span><h3 id="train-name"></h3><p id="train-detail"></p><p id="train-delay" class="train-delay"></p><h4 class="eyebrow upcoming-heading">Upcoming stops</h4><ol id="upcoming-stops" class="upcoming-stops"></ol><p id="upcoming-empty" class="matching" hidden></p></div>
-      <label for="station-select" class="eyebrow">Station</label>
-      <div class="select-wrap"><select class="station-select" id="station-select"></select></div>
-      <p class="station-meta" id="station-meta">Connecting to BART</p>
-      <section class="gap-card" id="gap-card" hidden><h3 class="eyebrow">Upcoming service gaps</h3><div id="gap-details"></div></section>
-      <h3 class="eyebrow departure-heading">Next departures</h3>
-      <div class="departures" id="departures" aria-live="off"></div>
-      <button class="text-button" id="view-service">Service & data</button>
-    </section>
-    <section id="network-panel" hidden>
-      <div class="status-card" id="status-card" role="status"><h3>Connecting to the source</h3><p>Train estimates appear when a fresh feed arrives.</p></div>
-      <div class="alerts-list" id="alerts-list"></div>
-      <div class="source-health"><h3 class="eyebrow">Source health</h3><div class="source-row"><span>Train predictions</span><span id="trip-age">Connecting</span></div><div class="source-row"><span>Service alerts</span><span id="alert-age">Connecting</span></div><p class="matching" id="matching">Matching trips to the map.</p><button id="refresh" class="text-button">Refresh now</button></div>
-      <p class="coverage">Movement is estimated from BART stop predictions, not GPS. Estimates freeze when their source is older than 90 seconds. The OAK connector has no live arrivals.</p><p class="coverage cue-explanation">Amber outlines mark trains reported at least 1 minute late; red outlines mark 5 minutes or more. Tags show rounded minutes. Clock badges compare upcoming departures on the same line and direction. They appear for gaps at least 5 minutes and 50% above schedule, or 20 minutes when a schedule comparison is unavailable. Indicators clear when predictions go stale.</p>
-      <p class="sim-info">An independent map. Data from <a id="data-source-link" href="https://www.bart.gov/schedules/developers/gtfs-realtime" target="_blank" rel="noopener">BART GTFS-Realtime</a>. <span id="schedule-note"></span></p>
-    </section>
-  </aside>
-  <div class="sr-only" id="announcer" role="status" aria-live="polite"></div>
-</main>
-<noscript><p class="no-script">Enable JavaScript to see live BART departures and the moving map.</p></noscript>
-<script type="module" src="/map.js"></script>
-</body>
-</html>
+<main class="game" aria-label="Live Bay Area transit map">
+<svg class="map-svg" id="map" viewBox="-450 -100 1700 2500" role="group" aria-label="Bay Area transit. Select a stop for departures. Drag or pinch to explore.">
+<title>Bay Area, in motion</title><desc>A schematic map of BART, Caltrain, Muni rail, VTA light rail, SF Bay Ferry, SMART and an optional AC Transit bus layer.</desc>
+<g id="water"></g><g id="routes"></g><g id="stations"></g><g id="trains"></g><g id="station-labels"></g><g id="map-cues"></g>
+</svg>
+<header class="hud">
+<div class="city"><div class="city-title"><h1>MINITRANSIT</h1><button class="icon-button theme-toggle" id="theme" aria-label="Switch to night mode" aria-pressed="false" title="Night mode (N)"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="moon-symbol" d="M20 15.3A8.5 8.5 0 0 1 8.7 4 8.5 8.5 0 1 0 20 15.3Z"/><g class="sun-symbol"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg></button></div><p id="view-name">Bay Area, in motion.</p></div>
+<div class="live-hud"><button class="connection" id="connection" aria-controls="inspector" aria-expanded="false"><span class="dot" id="connection-dot"></span><span id="connection-text">Connecting</span></button><div class="time-display"><time class="clock">--:--</time><span>San Francisco</span></div><div class="train-count" title="Visible live vehicles, reported and estimated"><span class="vehicle-symbol" aria-hidden="true">▰</span><span id="train-count">—</span><span class="sr-only">visible vehicles</span></div></div>
+</header>
+<div class="view-controls"><label class="sr-only" for="line-select">Focus a route</label><select id="line-select" aria-label="Focus a route"><option value="all">All rail & ferries</option></select><button class="layer-button" id="buses" aria-pressed="false" title="Add AC Transit buses to the regional map">+ Buses</button></div>
+<p class="map-message" id="map-message" role="status">Connecting seven networks…</p>
+<div class="left-controls controls" aria-label="Map controls">
+<button class="icon-button pause" id="pause" aria-label="Pause movement" aria-pressed="false" title="Pause (Space)"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="pause-symbol" d="M8 5v14M16 5v14"/><path class="play-symbol" d="m8 5 11 7-11 7Z"/></svg></button>
+<button class="icon-button" id="labels" aria-label="Hide station names" aria-pressed="true" title="Station names (L)">Aa</button>
+<button class="icon-button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button><button class="icon-button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+</div>
+<footer class="network-palette"><nav id="network-tabs" aria-label="Choose a transit network"></nav><p id="network-caption">Rail & ferries · choose a network to explore</p></footer>
+<div class="right-controls controls"><button class="icon-button" id="reset" aria-label="Fit selected network" title="Fit network"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button><button class="icon-button" id="station-finder" aria-label="Find a station" aria-controls="inspector" aria-expanded="false" title="Find a stop"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg></button><button class="icon-button" id="service" aria-label="Service and data" aria-controls="inspector" aria-expanded="false" title="Service and data"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v7M12 6v1"/></svg><span id="alert-count" hidden></span></button></div>
+<div class="map-note"><span>Reported locations + estimated movement</span><span>Outlines show delays · clocks show gaps</span><span class="explore-hint">Choose a network · zoom for stop names</span><span class="source-credit">Data provided by <a href="https://511.org/open-data/transit" target="_blank" rel="noopener">511.org</a></span></div>
+<aside class="inspector" id="inspector" aria-labelledby="panel-title" hidden>
+<div class="panel-header"><h2 id="panel-title">At the platform</h2><button class="icon-button" id="close-panel" aria-label="Close details" title="Close (Esc)">×</button></div>
+<section id="station-panel">
+<div class="mini-train" id="train-card" hidden><span class="eyebrow" id="vehicle-label">Selected vehicle</span><h3 id="train-name"></h3><p id="train-detail"></p><p id="train-delay" class="train-delay"></p><h4 class="eyebrow">Upcoming stops</h4><ol id="upcoming-stops" class="upcoming-stops"></ol><p class="matching" id="upcoming-empty" hidden></p></div>
+<label class="eyebrow" for="station-search">Find a station or stop</label><input id="station-search" class="station-search" type="search" placeholder="Search every network…" autocomplete="off"><label class="sr-only" for="station-select">Station</label><select class="station-select" id="station-select"></select>
+<p class="station-meta" id="station-meta"></p><section class="gap-card" id="gap-card" hidden><h3 class="eyebrow">Upcoming service gaps</h3><div id="gap-details"></div></section><h3 class="eyebrow departure-heading">Next departures</h3><div class="departures" id="departures"></div><button class="text-button" id="view-service">Service & data</button>
+</section>
+<section id="network-panel" hidden><div class="status-card" id="status-card" role="status"></div><div class="network-health" id="network-health"></div><h3 class="eyebrow">Service alerts</h3><div class="alerts-list" id="alerts-list"></div><div class="source-health"><h3 class="eyebrow">Source health</h3><p id="trip-age"></p><p id="vehicle-age"></p><p id="alert-age"></p><p class="matching" id="matching"></p><button class="text-button" id="refresh">Refresh now</button></div><p class="coverage">Reported vehicle locations are snapped to the schematic. Other movement is estimated between stop predictions. Each source freezes when more than 3 minutes old. Missing predictions stay blank.</p><p class="coverage">Amber outlines mark reported delays of at least 1 minute; red marks 5 minutes. Gap clocks compare consecutive departures in the same direction with their schedule. Some routes have limited live coverage.</p><p class="sim-info">Independent map · data provided by <a href="https://511.org/open-data/transit" target="_blank" rel="noopener">511.org</a>. <span id="schedule-note"></span></p></section>
+</aside>
+<div class="sr-only" id="announcer" role="status" aria-live="polite"></div>
+</main><noscript><p class="no-script">Enable JavaScript to see the live map.</p></noscript><script type="module" src="/map.js"></script>
+</body></html>

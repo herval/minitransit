@@ -1,6 +1,8 @@
 # MiniTransit
 
-A live BART map inspired by Mini Metro. Includes named stations, animated train estimates, delay outlines and lateness badges, service-gap clocks, upcoming stops with platform details, and a night mode that remembers your preference.
+A live Bay Area transit map inspired by Mini Metro. Includes BART, Caltrain, Muni rail, VTA light rail, San Francisco Bay Ferry, SMART and AC Transit. Public app: https://minitransit.fly.dev.
+
+Choose a network to fit its routes and stops. The regional overview shows rail and ferries; **+ Buses** adds AC Transit, and its network tab opens the bus view. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks and a saved night mode are included.
 
 ## Run locally
 
@@ -13,22 +15,37 @@ cp .env.example .env
 npm start
 ```
 
-Open http://localhost:8080. The token stays on the server; `.env` is ignored by Git and Docker. Press **N** or use the moon/sun button to change the theme.
+Open http://localhost:8080. The existing environment key name is kept for compatibility; the token now covers all seven networks. It stays on the server. `.env` is ignored by Git and Docker.
 
 ```sh
 npm test
 npm run build
+npm run dev
 ```
 
-Run the build after changing `public/live-map.js`: it appends that module to the map's base code in `public/map.js`. The build is repeatable and runs during the Docker image build. `npm run dev` restarts the Node server when files change.
+Browser modules are served directly. The build validates the required assets. Space pauses movement, **L** toggles names, **N** toggles night mode, and Escape closes details.
+
+## Live data
+
+[511 Open Data](https://511.org/open-data/transit) supplies the consolidated regional GTFS schedule, trip updates, vehicle positions and service alerts. All networks and visitors share the same server caches: trip updates and positions refresh every 150 seconds, and alerts every 600 seconds. This uses about 54 upstream requests per hour during continuous operation on one server, within the default token budget of 60. Starts and schedule refreshes also make requests.
+
+Reported locations are snapped to schematic routes. Where no fresh reported location is available, movement is estimated between stop predictions. Each source expires after 180 seconds; old positions freeze and delay/gap indicators clear. Arrival times and delays appear only when reported. A reported position can show a vehicle even when upcoming-stop predictions are unavailable; those stops display an empty ETA. Coverage varies by route and time of day.
+
+The bundled, verified regional schedule provides immediate startup. A background refresh runs at most every 12 hours. `lib/regional-schedule.mjs` streams the roughly 300 MB expanded source archive and stores repeated stop patterns once, keeping schedule processing bounded. A failed refresh retains the last verified schedule. Shared 511 parent stops provide transfer hubs across agencies. Caltrain local and express services share one map corridor.
+
+To rebuild the bundled schedule from an already downloaded regional GTFS ZIP:
+
+```sh
+node scripts/prepare-region.mjs /path/to/regional.zip
+```
+
+The schematic rotates geography and simplifies paths into straight and diagonal segments; it is not a geographic navigation map. Muni buses, cable cars and VTA buses are outside this version. Stops explicitly marked nonpublic are hidden.
 
 ## Server and deployment
 
-`server.mjs` serves the map and public assets, `/api/live` for normalized BART data, and `/healthz` for an independent health check. Set `PORT` (default `8080`), `HOST` (default `0.0.0.0`), and `BART_511_API_KEY` in the runtime environment. The included Dockerfile runs as an unprivileged user.
+`server.mjs` serves public assets, `/api/network` for stops and map geometry, `/api/live` for live vehicles, departures and alerts, and `/healthz` for an independent health check. Set `PORT` (default `8080`), `HOST` (default `0.0.0.0`), and `BART_511_API_KEY` in the runtime environment.
 
-The public deployment is https://minitransit.fly.dev. `fly.toml` configures HTTPS, health checks, and one shared CPU with 256 MB of RAM in San Jose (`sjc`). The Machine stops while idle and starts automatically when someone visits.
-
-`BART_511_API_KEY` is stored in Fly's encrypted runtime secrets. To replace it, use `fly secrets import --app minitransit --stage` and supply a `BART_511_API_KEY=...` line on standard input. Do not add the key to the Docker image, source files, or `fly.toml`.
+The Dockerfile runs as an unprivileged user. `fly.toml` configures HTTPS, health checks, automatic stop/start, and one shared-CPU Machine with 512 MB RAM in San Jose. The larger memory allocation allows live regional data and background schedule refreshes to coexist. No database or persistent volume is required.
 
 ```sh
 fly deploy --remote-only --ha=false
@@ -36,16 +53,6 @@ fly status
 fly checks list
 ```
 
-Keep exactly one Machine: feed caches are shared inside one Node process, and extra Machines would each make their own upstream requests. Use `--ha=false` on redeployments so Fly does not add a spare Machine.
+Keep one Machine so each instance does not make duplicate upstream requests. Store the token in Fly's encrypted runtime secrets. To replace it, use `fly secrets import --app minitransit --stage` and supply a `BART_511_API_KEY=...` line on standard input. Never include the key in the image or source.
 
-The app has no database or persistent volume. Source schedules and responses are cached in memory. A restart refreshes them on the next live request.
-
-## Data and limitations
-
-With a token, [511 Open Data](https://511.org/open-data/transit) provides BART GTFS schedules, trip predictions, and service alerts. The matching schedule is fetched every 12 hours; predictions are shared for 75 seconds and alerts for 10 minutes. This stays within a default 60-request/hour token budget during normal continuous use on one server. Cold starts and restarts also request data.
-
-Without a token the server attempts BART's direct GTFS feeds, which may reject automated requests. Use the 511 token for reliable live service.
-
-Train positions are estimates interpolated between predicted stops, not GPS locations. Delay badges require a reported delay; an unknown delay is not counted as on time. Gap clocks compare consecutive fresh departures in the same direction. Old predictions are marked stale and stop moving. Platform details identify their source. Some services, including the Oakland Airport connector, may have limited live coverage.
-
-This is an independent visualization, not an official BART service or a Mini Metro product.
+This is an independent visualization, not an official transit service or a Mini Metro product. Data provided by 511.org.

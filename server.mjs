@@ -5,7 +5,7 @@ import {resolve,join,extname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {gzip} from 'node:zlib';
 import {promisify} from 'node:util';
-import {getLiveSnapshot} from './lib/live.mjs';
+import {getRegionalSnapshot,getLiveNetwork} from './lib/regional-live.mjs';
 
 const root=fileURLToPath(new URL('.',import.meta.url)),compress=promisify(gzip);
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.json':'application/json; charset=utf-8'};
@@ -36,7 +36,7 @@ async function loadAssets(){
 }
 
 // Dependencies are injectable so HTTP behavior can be verified without network calls.
-export async function createAppServer({apiKey=process.env.BART_511_API_KEY,snapshot=getLiveSnapshot}={}){
+export async function createAppServer({apiKey=process.env.BART_511_API_KEY,snapshot=getRegionalSnapshot,network=getLiveNetwork}={}){
   const assets=await loadAssets();
   return createServer(async(request,response)=>{
     response.setHeader('X-Content-Type-Options','nosniff');
@@ -50,14 +50,14 @@ export async function createAppServer({apiKey=process.env.BART_511_API_KEY,snaps
     if(path==='/healthz'){
       response.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});response.end(head?undefined:'{"ok":true}');return;
     }
-    if(path==='/api/live'){
+    if(path==='/api/live'||path==='/api/network'){
       try{
-        const value=await snapshot({apiKey});
+        const value=await (path==='/api/network'?network:snapshot)({apiKey});
         const body=Buffer.from(JSON.stringify(value)),useGzip=acceptsGzip(request.headers['accept-encoding'])&&body.length>1024;
         const bytes=useGzip?await compress(body):body;
         response.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Vary':'Accept-Encoding','Content-Length':bytes.length,...(useGzip?{'Content-Encoding':'gzip'}:{})});response.end(head?undefined:bytes);
       }catch{
-        const body=JSON.stringify({error:'The BART feed could not be loaded. Retrying shortly.',serverTime:Date.now()});
+        const body=JSON.stringify({error:'The regional transit feed could not be loaded. Retrying shortly.',serverTime:Date.now()});
         response.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});response.end(head?undefined:body);
       }
       return;

@@ -1,424 +1,214 @@
-import {inferSegment,sourceState,TRIP_MAX_AGE,ALERT_MAX_AGE,upcomingStops,trainDelay,serviceGaps} from '/model.js';
-import {buildNetworkGeometry} from '/geometry.js';
-const NS='http://www.w3.org/2000/svg';
-const $=s=>document.querySelector(s);
-const make=(tag,attrs={},parent)=>{const e=document.createElementNS(NS,tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));if(parent)parent.appendChild(e);return e};
-const stationData=[
- ['EMBR','Embarcadero',350,400,'square',true,-18,-24],['MONT','Montgomery Street',325,425,'circle',false],['POWL','Powell Street',300,450,'circle',true,-21,-13],['CIVC','Civic Center / UN Plaza',275,475,'circle',false],['16TH','16th Street / Mission',250,500,'circle',false],['24TH','24th Street / Mission',225,525,'circle',true,-21,-13],['GLEN','Glen Park',200,550,'circle',false],['BALB','Balboa Park',175,575,'circle',false],['DALY','Daly City',150,600,'diamond',true,-18,29],['COLM','Colma',150,640,'circle',false],['SSAN','South San Francisco',185,675,'circle',false],['SBRN','San Bruno',220,710,'circle',false],['SFIA','SFO Airport',300,710,'diamond',true,18,4],['MLBR','Millbrae',255,745,'diamond',true,19,5],
- ['WOAK','West Oakland',535,400,'circle',true,-15,32],['12TH','12th Street / Oakland City Center',620,360,'circle',false],['19TH','19th Street Oakland',620,320,'circle',false],['MCAR','MacArthur',620,280,'square',true,22,6],['ASHB','Ashby',575,235,'circle',false],['DBRK','Downtown Berkeley',530,190,'circle',true,-20,4],['NBRK','North Berkeley',530,150,'circle',false],['PLZA','El Cerrito Plaza',530,110,'circle',false],['DELN','El Cerrito del Norte',530,70,'circle',false],['RICH','Richmond',530,30,'diamond',true,-20,5],
- ['ROCK','Rockridge',665,235,'circle',false],['ORIN','Orinda',710,190,'circle',false],['LAFY','Lafayette',755,145,'circle',false],['WCRK','Walnut Creek',800,100,'circle',true,-12,-24],['PHIL','Pleasant Hill',845,100,'circle',false],['CONC','Concord',890,100,'circle',true,0,32],['NCON','North Concord',935,100,'circle',false],['PITT','Pittsburg / Bay Point',980,100,'square',false],['PCTR','Pittsburg Center',1025,100,'circle',false],['ANTC','Antioch',1070,100,'diamond',true,0,-24],
- ['LAKE','Lake Merritt',655,435,'circle',true,22,5],['FTVL','Fruitvale',690,470,'circle',false],['COLS','Coliseum',725,505,'square',true,21,-10],['OAKL','OAK Airport',660,570,'diamond',false],['SANL','San Leandro',760,540,'circle',false],['BAYF','Bay Fair',795,575,'square',true,-18,9],['CAST','Castro Valley',855,575,'circle',false],['WDUB','West Dublin / Pleasanton',915,575,'circle',false],['DUBL','Dublin / Pleasanton',975,575,'diamond',true,0,-24],['HAYW','Hayward',795,615,'circle',false],['SHAY','South Hayward',795,655,'circle',false],['UCTY','Union City',835,695,'circle',false],['FRMT','Fremont',875,735,'circle',true,21,5],['WARM','Warm Springs / South Fremont',915,775,'circle',false],['MLPT','Milpitas',955,815,'circle',false],['BERY','Berryessa / North San Jose',995,855,'diamond',true,-18,-22]
-];
-const stations=Object.fromEntries(stationData.map(s=>[s[0],{id:s[0],name:s[1],x:s[2],y:s[3],shape:s[4],major:s[5],dx:s[6]??18,dy:s[7]??5}]));
-const coords={...stations,_WYE:{x:620,y:400}};
-const sf=['DALY','BALB','GLEN','24TH','16TH','CIVC','POWL','MONT','EMBR','WOAK','_WYE'];
-const north=['12TH','19TH','MCAR'];
-const rich=['ASHB','DBRK','NBRK','PLZA','DELN','RICH'];
-const south=['LAKE','FTVL','COLS','SANL','BAYF','HAYW','SHAY','UCTY','FRMT','WARM','MLPT','BERY'];
-const definitions=[
- {id:'yellow',name:'Yellow',color:'#edc63b',laneOrder:-10.5,ids:['SFIA','SBRN','SSAN','COLM',...sf,...north,'ROCK','ORIN','LAFY','WCRK','PHIL','CONC','NCON','PITT','PCTR','ANTC'],ends:['SFO Airport','Antioch']},
- {id:'red',name:'Red',color:'#e94e48',laneOrder:-3.5,ids:['MLBR','SBRN','SSAN','COLM',...sf,...north,...rich],ends:['Millbrae','Richmond']},
- {id:'blue',name:'Blue',color:'#3989c6',laneOrder:10.5,ids:[...sf,...south.slice(0,5),'CAST','WDUB','DUBL'],ends:['Daly City','Dublin / Pleasanton']},
- {id:'green',name:'Green',color:'#36a578',laneOrder:3.5,ids:[...sf,...south],ends:['Daly City','Berryessa']},
- {id:'orange',name:'Orange',color:'#ed8b38',laneOrder:-3.5,ids:['RICH',...rich.slice(0,-1).reverse(),'MCAR','19TH','12TH','_WYE',...south],ends:['Richmond','Berryessa']}
-];
-// This module is appended to map.js by the build preparation script.
-let focusLine='all',selectedStation='EMBR',paused=matchMedia('(prefers-reduced-motion: reduce)').matches,labels=true,followed=null,inspectorTrigger=null,selectedGapKey=null;
-let snapshot=null,clockOffset=0,fetching=false,pollTimer=null,lastStatus='',lastPanelUpdate=0;
-const trains=new Map(),gapsByStation=new Map(),upcomingRows=new Map();
-const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+import {AGENCIES,AGENCY_BY_ID,project,REGIONAL_MAX_AGE} from './networks.js';
+import {sourceState,trainDelay,serviceGaps} from './model.js';
+import {createMapGeometry,locateTrain,remainingStops} from './regional-geometry.js';
+const $=s=>document.querySelector(s),NS='http://www.w3.org/2000/svg';
+const make=(tag,attrs={},parent)=>{const el=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(attrs))el.setAttribute(k,v);parent?.append(el);return el;};
+const esc=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const now=()=>Date.now()+clockOffset;
-const empty=(parent,text)=>{const p=document.createElement('p');p.className='empty-state';p.textContent=text;parent.appendChild(p)};
-const setHTML=(el,html)=>{if(el.innerHTML!==html)el.innerHTML=html};
-const network=buildNetworkGeometry(definitions,coords,{branches:[
- {line:'yellow',ids:['SFIA','MLBR']},
- {line:'red',ids:['SFIA','MLBR']},
- {line:'red',ids:['SBRN','SFIA']},
- {line:'yellow',ids:['SBRN','MLBR']}
-]});
-function drawRoute(geometry,attributes={}){
- return make('path',{d:geometry.points.map((p,i)=>(i?'L':'M')+p.x+','+p.y).join(' '),class:'route',...attributes},$('#routes'));
+let network,geometry,snapshot,focus='all',line='all',buses=false,labels=true,paused=matchMedia('(prefers-reduced-motion: reduce)').matches,selected=null,followed=null,clockOffset=0,fetching=false,timer,scale=1,lastTick=0,trigger=null;
+let view={x:-450,y:0,w:1700,h:2500},stationNodes=new Map(),routeNodes=[],trains=new Map(),cues=[],occupied=[],upcomingRows=new Map();
+const canvas=document.createElement('canvas'),measure=canvas.getContext('2d');measure.font='500 12px DM Sans, sans-serif';
+const enabledAgency=id=>focus==='all'?(id!=='AC'||buses):id===focus;
+const enabledLine=id=>!!network?.lines[id]&&enabledAgency(network.lines[id].agency)&&(line==='all'||id===line);
+const enabledStation=s=>s.public!==false&&s.lines.some(enabledLine);
+const fresh=t=>sourceState(t,now(),REGIONAL_MAX_AGE)==='live';
+const age=stamp=>{if(!stamp)return'unavailable';const seconds=Math.max(0,Math.floor(now()/1000-stamp));return seconds<60?seconds+'s ago':Math.floor(seconds/60)+'m '+seconds%60+'s ago';};
+const eta=time=>time==null?'—':Math.max(0,Math.ceil((time-now()/1000)/60))===0?'Now':Math.ceil((time-now()/1000)/60)+'m';
+function color(hex){if(document.documentElement.dataset.theme!=='night')return hex;const rgb=hex.replace('#','').match(/../g)?.map(v=>parseInt(v,16));if(!rgb||rgb.length!==3)return hex;return Math.max(...rgb)<175?'#'+rgb.map(v=>Math.round(v*.65+255*.35).toString(16).padStart(2,'0')).join(''):hex;}
+function message(text){$('#map-message').hidden=!text;$('#map-message').textContent=text;}
+function bounds(){return $('#map').getBoundingClientRect();}
+function screen(point){const rect=bounds();return{x:(point.x-view.x)*scale+(rect.width-view.w*scale)/2,y:(point.y-view.y)*scale+(rect.height-view.h*scale)/2};}
+function fit(){
+ const stops=Object.values(network.stations).filter(enabledStation);if(!stops.length)return;
+ const xs=stops.map(s=>s.x),ys=stops.map(s=>s.y),rect=bounds(),mobile=innerWidth<=650;
+ const w=Math.max(14,Math.max(...xs)-Math.min(...xs)),h=Math.max(14,Math.max(...ys)-Math.min(...ys));
+ const top=mobile?155:180,bottom=mobile?190:165,k=Math.min((rect.width-(mobile?65:140))/w,(rect.height-top-bottom)/h);
+ view={x:(Math.max(...xs)+Math.min(...xs))/2-rect.width/k/2,y:(Math.max(...ys)+Math.min(...ys))/2-(top+(rect.height-top-bottom)/2)/k,w:rect.width/k,h:rect.height/k};drawView(true);
 }
-definitions.forEach(r=>{
- r.geometry=network.routes.get(r.id);r.points=r.geometry.points;r.distances=r.geometry.distances;
- r.path=drawRoute(r.geometry,{stroke:r.color,'data-route':r.id});r.length=r.path.getTotalLength();
- r.branches=network.branches.filter(branch=>branch.line===r.id).map(branch=>({...branch,path:drawRoute(branch,{stroke:r.color,'data-airport-line':r.id})}));
-});
-make('path',{d:'M725 505 L660 570',stroke:'#a0a6a9','stroke-dasharray':'3 7',class:'route connector'},$('#routes'));
-const friendly={MONT:'Montgomery St',POWL:'Powell St','16TH':'16th St / Mission','24TH':'24th St / Mission','12TH':'12th St','19TH':'19th St',WARM:'Warm Springs',BERY:'Berryessa / North San José',OAKL:'Oakland Airport'};
-const sfLabels=new Set(['MONT','POWL','CIVC','16TH','24TH','GLEN','BALB','DALY','COLM','SSAN']);
-const richLabels=new Set(['RICH','DELN','PLZA','NBRK','DBRK','ASHB']);
-const angledLabels=new Set(['WCRK','PHIL','CONC','NCON','PITT','PCTR','ANTC','CAST','WDUB','DUBL']);
-function labelPosition(id,phone=false){
- let position={x:24,y:6,anchor:'start',angle:0};
- if(sfLabels.has(id)||richLabels.has(id)||['SBRN','OAKL','BAYF','BERY'].includes(id))position={x:-24,y:6,anchor:'end',angle:0};
- if(angledLabels.has(id))position={x:4,y:-24,anchor:'start',angle:-45};
- if(id==='CAST')position={x:4,y:-56,anchor:'start',angle:-45,leader:'M0 -18 L0 -45 L4 -48'};
- if(id==='EMBR')position={x:-24,y:-24,anchor:'end',angle:0};
- if(id==='WOAK')position={x:0,y:-28,anchor:'middle',angle:0};
- if(id==='MLBR')position={x:24,y:18,anchor:'start',angle:0};
- if(phone){
-  if(sfLabels.has(id))position={x:24,y:6,anchor:'start',angle:0};
-  if(['12TH','19TH','MCAR'].includes(id))position={x:-24,y:6,anchor:'end',angle:0};
-  if(id==='ROCK')position={x:30,y:-66,anchor:'end',angle:0,leader:'M0 -18 L0 -48 L15 -60'};
-  if(id==='WOAK')position={x:-24,y:-25,anchor:'end',angle:0};
-  if(id==='SBRN')position={x:12,y:42,anchor:'end',angle:0,leader:'M-12 12 L-28 17 L-72 17'};
-  if(id==='LAKE')position={x:-24,y:22,anchor:'end',angle:0};
-  if(id==='FTVL')position={x:-24,y:30,anchor:'end',angle:0};
+function drawView(rebuild=true){
+ $('#map').setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);const rect=bounds();scale=Math.min(rect.width/view.w,rect.height/view.h)||1;
+ if(network&&rebuild){geometry=createMapGeometry(network,scale);routeNodes.forEach((el,i)=>{const shape=geometry.shapes[i];el.setAttribute('d',shape.points.map((p,j)=>(j?'L':'M')+p.x+','+p.y).join(' '));});}
+ layoutStations();renderVehicles(performance.now());renderCues();
+}
+function overlaps(rect){return occupied.some(r=>rect.x<r.x+r.w&&rect.x+rect.w>r.x&&rect.y<r.y+r.h&&rect.y+rect.h>r.y);}
+function layoutStations(){
+ if(!network)return;occupied=[];
+ const rect=bounds();occupied.push({x:0,y:0,w:Math.min(360,rect.width*.65),h:155},{x:rect.width-300,y:0,w:300,h:100},{x:0,y:rect.height-155,w:rect.width,h:155});
+ const ordered=[...stationNodes].sort(([,a],[,b])=>(Number(b.data.id===selected)*100+Number(b.data.major)*10+b.data.agencies.length)-(Number(a.data.id===selected)*100+Number(a.data.major)*10+a.data.agencies.length));
+ for(const[id,node]of ordered){
+  const s=node.data,p=screen(s),active=enabledStation(s),detail=focus!=='all'&&focus!=='AC'||scale>1.3;
+  const visible=active&&(s.major||detail||id===selected)&&p.x>-20&&p.x<rect.width+20&&p.y>90&&p.y<rect.height-100;
+  node.el.setAttribute('visibility',visible?'visible':'hidden');node.el.setAttribute('tabindex',visible?'0':'-1');node.el.setAttribute('aria-hidden',String(!visible));node.label.setAttribute('visibility','hidden');node.el.classList.toggle('selected',id===selected);
+  const radius=Math.max(s.agencies.length>1?6.5:s.major?5.5:3.5,((node.lanes||1)-1)*1.5+2.3)/scale;node.shape.setAttribute('r',radius);node.hit.setAttribute('r',Math.max(11/scale,radius));
+  if(!visible||!labels)continue;
+  measure.font=(s.major?'700':'500')+' 12px DM Sans, sans-serif';
+  const name=s.name.replace(/ Station$/i,''),w=measure.measureText(name).width+9,h=17,offset=Math.max(10,radius*scale+4),positions=[[offset,-7],[-w-offset,-7],[-w/2,-offset-14],[-w/2,offset]];
+  let placement=null;
+  for(const[dx,dy]of positions){const box={x:p.x+dx,y:p.y+dy,w,h};if(box.x<9||box.x+w>rect.width-8||overlaps(box))continue;placement={dx,dy,box};break;}
+  if(!placement&&id!==selected)continue;
+  placement??={dx:10,dy:-7,box:{x:p.x+10,y:p.y-7,w,h}};
+  occupied.push(placement.box);node.label.setAttribute('transform',`translate(${s.x+placement.dx/scale} ${s.y+(placement.dy+12)/scale})`);node.label.setAttribute('font-size',12/scale);node.label.setAttribute('visibility','visible');
  }
- return position;
 }
-stationData.forEach(([id])=>{
- const s=stations[id],g=make('g',{class:'station'+(id===selectedStation?' selected':''),transform:`translate(${s.x} ${s.y})`,tabindex:0,role:'button','aria-label':s.name+' station, show live departures','data-station':id},$('#stations'));
- make('title',{},g).textContent=s.name;make('circle',{class:'hit',r:23},g);make('circle',{class:'selection',r:21},g);
- if(['RICH','ANTC','SFIA','DUBL','OAKL','BERY'].includes(id))make('path',{class:'node',d:'M0 -15 L14 11 L-14 11Z'},g);
- else if(s.shape==='circle')make('circle',{class:'node',r:12.5},g);
- else make('rect',{class:'node',x:-12,y:-12,width:24,height:24,rx:0,transform:s.shape==='diamond'?'rotate(45)':''},g);
- s.leader=make('path',{class:'label-leader'},g);
- const label=make('text',{class:'station-label'+(s.major?' major':''),'data-label':id},g);label.textContent=friendly[id]||s.name;s.label=label;
- g.addEventListener('click',()=>chooseStation(id));g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseStation(id)}});s.el=g;s.gapBadge=createCueBadge('gap',()=>{if(s.gapBadge.gap)chooseStation(id,{gapKey:s.gapBadge.gap.key})});
-});
-Object.values(stations).sort((a,b)=>a.name.localeCompare(b.name)).forEach(s=>{const opt=document.createElement('option');opt.value=s.id;opt.textContent=s.name;$('#station-select').appendChild(opt)});
-function openInspector(mode,trigger=document.activeElement){
- const wasHidden=$('#inspector').hidden;
- if(wasHidden)inspectorTrigger=trigger;
- $('#inspector').hidden=false;document.body.classList.add('inspector-open');
- $('#station-panel').hidden=mode!=='station';$('#network-panel').hidden=mode!=='network';
- $('#panel-title').textContent=mode==='station'?'At the platform':'Service & data';
- $('#station-finder').setAttribute('aria-expanded',mode==='station');
- for(const id of ['service','connection'])$('#'+id).setAttribute('aria-expanded',mode==='network');
- if(wasHidden||mode==='network')$('#close-panel').focus({preventScroll:true});
+function buildMap(){
+ $('#routes').replaceChildren();$('#stations').replaceChildren();$('#trains').replaceChildren();$('#station-labels').replaceChildren();$('#map-cues').replaceChildren();stationNodes.clear();trains.clear();routeNodes=[];cues=[];
+ geometry=createMapGeometry(network,scale);
+ const lanes=new Map();for(const e of network.edges)for(const id of [e.a,e.b])lanes.set(id,Math.max(lanes.get(id)||1,e.lines.length));
+ for(const shape of geometry.shapes){const meta=network.lines[shape.line];routeNodes.push(make('path',{class:'route '+shape.mode,stroke:color(meta.color),'data-line':shape.line},$('#routes')));}
+ for(const s of Object.values(network.stations)){
+  const el=make('g',{class:'station'+(s.agencies.length>1?' transfer':''),transform:`translate(${s.x} ${s.y})`,tabindex:0,role:'button','aria-label':s.name+', '+s.agencies.map(a=>AGENCY_BY_ID[a].short).join(', '),'data-station':s.id},$('#stations'));
+  make('title',{},el).textContent=s.name;
+  const hit=make('circle',{class:'hit'},el),shape=make('circle',{class:'node'},el),label=make('text',{class:'station-label'+(s.major?' major':'')},$('#station-labels'));label.textContent=s.name.replace(/ Station$/i,'');
+  const select=()=>chooseStation(s.id);el.addEventListener('click',select);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}});stationNodes.set(s.id,{el,shape,label,hit,data:s,lanes:lanes.get(s.id)});
+ }
+ $('#water').replaceChildren();const coast=[[-122.49,37.82],[-122.43,37.93],[-122.51,38.02],[-122.49,38.10],[-122.28,38.13],[-122.04,38.06],[-122.17,37.96],[-122.32,37.86],[-122.30,37.80],[-122.24,37.75],[-122.12,37.64],[-121.96,37.47],[-122.04,37.43],[-122.18,37.48],[-122.32,37.62],[-122.39,37.75]].map(([lon,lat])=>project(lat,lon,network.projectionAngle));
+ make('path',{class:'water',d:coast.map((p,i)=>(i?'L':'M')+p.x+','+p.y).join(' ')+'Z'},$('#water'));
+ buildTabs();buildLineSelect();updateVisibility();
 }
-function closeInspector(){
- $('#inspector').hidden=true;document.body.classList.remove('inspector-open');
- for(const id of ['service','connection','station-finder'])$('#'+id).setAttribute('aria-expanded','false');
- if(inspectorTrigger?.isConnected)inspectorTrigger.focus({preventScroll:true});layoutCues();
+function buildTabs(){
+ const nav=$('#network-tabs');nav.replaceChildren();
+ for(const a of [{id:'all',short:'Bay Area',name:'All rail and ferries',color:'#89969e'},...AGENCIES]){
+  const button=document.createElement('button');button.className='network-tab';button.dataset.network=a.id;button.title=a.name;button.setAttribute('aria-pressed',String(focus===a.id));button.style.setProperty('--network-color',a.color);
+  const dot=document.createElement('span');dot.className='network-dot';dot.setAttribute('aria-hidden','true');button.append(dot,document.createTextNode(a.short));button.addEventListener('click',()=>chooseNetwork(a.id));nav.append(button);
+ }
 }
-function chooseStation(id,{open=true,keepTrain=false,gapKey=null}={}){
- if(!stations[id])return;selectedGapKey=gapKey;
- stations[selectedStation].el.classList.remove('selected');selectedStation=id;stations[id].el.classList.add('selected');$('#station-select').value=id;
- if(!keepTrain){followed=null;$('#train-card').hidden=true;for(const t of trains.values())t.el.classList.remove('followed')}
- if(open)openInspector('station',stations[id].el);
- renderDepartures();renderStatus();layoutCues();
+function buildLineSelect(){
+ const select=$('#line-select');select.replaceChildren(new Option(focus==='all'?(buses?'All networks':'All rail & ferries'):'All '+AGENCY_BY_ID[focus].short+' routes','all'));
+ if(focus!=='all')for(const l of Object.values(network.lines).filter(l=>l.agency===focus).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})))select.add(new Option(l.name,l.id));
+ select.value=line;
 }
-function predictionStatus(){return snapshot?sourceState(snapshot.trips.timestamp,now()):'unavailable'}
-function renderDepartures(){
- renderGapCard();const ds=$('#departures');ds.replaceChildren();
- const available=definitions.filter(r=>r.ids.includes(selectedStation)||(['red','yellow'].includes(r.id)&&['SFIA','MLBR'].includes(selectedStation)));
- $('#station-meta').textContent=available.length?`${available.length} ${available.length===1?'line':'lines'} · live departures`:'Airport connector · no live arrivals';
- if(selectedStation==='OAKL'){empty(ds,'BART does not publish live arrivals for the airport connector.');return}
- if(!snapshot){empty(ds,'Connecting to BART…');return}
- if(predictionStatus()!=='live'){empty(ds,'Fresh departure predictions are unavailable. Retrying automatically.');return}
- const items=(snapshot.trips.departures[selectedStation]||[]).filter(d=>d.time>=now()/1000-15&&sourceState(d.timestamp,now())==='live').slice(0,6);
- if(!items.length){empty(ds,['PCTR','ANTC'].includes(selectedStation)?'BART publishes limited matching data for this branch. No verified departure is available.':'No verified departures in the next 90 minutes.');return}
- items.forEach(d=>{
-  const route=definitions.find(r=>r.id===d.line);if(!route)return;
-  const row=document.createElement('div');row.className='departure';
-  const seconds=d.time-now()/1000;const eta=seconds<=20?'Due':Math.ceil(seconds/60);
-  row.innerHTML=`<span class="route-dot" style="background:${route.color}"></span><div><div class="destination">${esc(d.headsign)}</div><div class="direction">${route.name} line${d.platform?' · platform '+esc(d.platform):''}</div></div><span class="eta">${eta}${typeof eta==='number'?'<small>min</small>':''}</span>`;
-  ds.appendChild(row);
+function chooseNetwork(id){focus=id;line='all';if(id==='AC')buses=true;followed=null;closePanel(false);buildLineSelect();updateVisibility();fit();$('#network-tabs [data-network="'+id+'"]').scrollIntoView({block:'nearest',inline:'nearest'});renderStatus();}
+function updateVisibility(){
+ if(!network)return;
+ routeNodes.forEach((el,i)=>{const shape=geometry.shapes[i];el.style.display=enabledLine(shape.line)?'':'none';el.setAttribute('stroke',color(network.lines[shape.line].color));});
+ for(const button of document.querySelectorAll('[data-network]'))button.setAttribute('aria-pressed',String(button.dataset.network===focus));
+ $('#buses').setAttribute('aria-pressed',String(buses));$('#buses').textContent=buses?'− Buses':'+ Buses';
+ $('#view-name').textContent=focus==='all'?'Bay Area, in motion.':AGENCY_BY_ID[focus].name+', in motion.';
+ $('#network-caption').textContent=focus==='all'?(buses?'Seven networks · rail, ferries & buses':'Six rail & ferry networks · buses optional'):network.counts[focus].stations+' stops · '+(focus==='AC'?'bus network':AGENCY_BY_ID[focus].name);
+ layoutStations();populateStations();renderCues();renderVehicles(performance.now());
+}
+function populateStations(query=$('#station-search').value){
+ if(!network)return;
+ const select=$('#station-select'),search=query.trim().toLowerCase();
+ const options=Object.values(network.stations).filter(s=>s.public!==false&&(search?(s.name+' '+s.agencies.map(a=>AGENCY_BY_ID[a].name).join(' ')).toLowerCase().includes(search):enabledStation(s))).sort((a,b)=>a.name.localeCompare(b.name));
+ const chosen=network.stations[selected];const list=options.slice(0,250);if(chosen&&!list.some(s=>s.id===selected))list.unshift(chosen);
+ select.replaceChildren();for(const s of list)select.add(new Option(s.name+' · '+s.agencies.map(a=>AGENCY_BY_ID[a].short).join(' / '),s.id));
+ if(!list.length)select.add(new Option('No matching stops',''));select.value=selected||list[0]?.id||'';
+}
+function openPanel(mode){trigger??=document.activeElement;$('#inspector').hidden=false;document.body.classList.add('inspector-open');$('#station-panel').hidden=mode!=='station';$('#network-panel').hidden=mode!=='network';$('#panel-title').textContent=mode==='station'?'At the platform':'Service & data';for(const id of ['service','connection'])$('#'+id).setAttribute('aria-expanded',String(mode==='network'));$('#station-finder').setAttribute('aria-expanded',String(mode==='station'));}
+function closePanel(restore=true){$('#inspector').hidden=true;document.body.classList.remove('inspector-open');for(const id of ['service','connection','station-finder'])$('#'+id).setAttribute('aria-expanded','false');if(restore&&trigger?.isConnected)trigger.focus({preventScroll:true});trigger=null;}
+function chooseStation(id,keepTrain=false){const s=network.stations[id];if(!s)return;let changed=false;if(!enabledStation(s)){focus=s.agencies.find(a=>a!=='AC')||'AC';line='all';if(focus==='AC')buses=true;buildLineSelect();updateVisibility();changed=true;}selected=id;if(!keepTrain)followed=null;const p=screen(s),r=bounds();if(changed||p.x<35||p.x>r.width-35||p.y<160||p.y>r.height-160){const w=Math.min(view.w,400),h=w*r.height/r.width;view={x:s.x-w/2,y:s.y-h/2,w,h};drawView();}populateStations();openPanel('station');renderStation();layoutStations();renderCues();}
+function chooseTrain(id){const t=trains.get(id);if(!t)return;const stop=t.raw.stops[t.position?.nextIndex??0];if(stop)selected=stop.station;followed=id;populateStations();openPanel('station');renderStation();layoutStations();}
+function addTrain(raw){
+ const meta=network.lines[raw.line];if(!meta)return null;
+ const el=make('g',{class:'train',tabindex:0,role:'button','aria-label':AGENCY_BY_ID[raw.agency].short+' '+raw.headsign,'data-agency':raw.agency},$('#trains'));
+ const body=make('g',{},el);make('rect',{class:'vehicle-outline',x:-11,y:-6,width:22,height:12,rx:3},body);
+ const shape=meta.mode==='ferry'?'M-10 -4 L7 -4 L11 0 L7 4 L-10 4Z':meta.mode==='bus'?'M-8 -4 H8 V4 H-8Z':'M-10 -4 H10 V4 H-10Z';
+ make('path',{class:'vehicle-body',d:shape,fill:color(meta.color)},body);make('path',{class:'vehicle-window',d:'M3 -2 H6 V2 H3Z'},body);
+ el.addEventListener('click',()=>chooseTrain(raw.id));el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseTrain(raw.id);}});
+ return{raw,el,body,last:null,position:null};
+}
+function syncTrains(){
+ const ids=new Set();for(const raw of snapshot.trips.trains){ids.add(raw.id);let t=trains.get(raw.id);if(!t){t=addTrain(raw);if(t)trains.set(raw.id,t);}if(t)t.raw=raw;}
+ for(const[id,t]of trains)if(!ids.has(id)){t.el.remove();trains.delete(id);}
+}
+function renderVehicles(time){
+ if(!network||!geometry)return;let count=0;
+ for(const t of trains.values()){
+  if(!enabledLine(t.raw.line)){t.el.setAttribute('visibility','hidden');t.el.setAttribute('tabindex','-1');continue;}
+  const position=locateTrain(t.raw,network,geometry,now());
+  if(position){if(!paused||!t.last)t.last=position;t.position=position;}else t.position=null;
+  if(!t.last){t.el.setAttribute('visibility','hidden');t.el.setAttribute('tabindex','-1');continue;}
+  const freshPosition=!!position;t.el.classList.toggle('stale',!freshPosition);t.el.setAttribute('visibility','visible');t.el.setAttribute('tabindex','0');
+  t.el.setAttribute('transform',`translate(${t.last.x} ${t.last.y})`);t.body.setAttribute('transform',`scale(${(focus==='all'?.6:1)/scale}) rotate(${t.last.angle})`);
+  t.body.querySelector('.vehicle-body').setAttribute('fill',color(network.lines[t.raw.line].color));
+  const delay=freshPosition?trainDelay(t.raw,now()):null;t.delay=delay;t.el.classList.toggle('late',delay?.seconds>=60);t.el.classList.toggle('severe',delay?.seconds>=300);
+  if(freshPosition)count++;
+ }
+ $('#train-count').textContent=count;
+}
+function badge(x,y,text,severe,onClick){
+ const width=Math.max(28,text.length*6.5+12),el=make('g',{class:'cue-badge'+(severe?' severe':''),transform:`translate(${x} ${y}) scale(${1/scale})`,tabindex:0,role:'button','aria-label':text},$('#map-cues'));
+ make('rect',{x:-width/2,y:-10,width,height:20,rx:10},el);make('text',{},el).textContent=text;el.addEventListener('click',onClick);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onClick();}});return el;
+}
+function placeCue(point,text,preferred){
+ const p=screen(point),width=Math.max(28,text.length*6.5+12),rect=bounds();
+ for(const[dx,dy]of preferred){const box={x:p.x+dx-width/2-3,y:p.y+dy-12,w:width+6,h:24};if(box.x<5||box.x+box.w>rect.width-5||overlaps(box))continue;occupied.push(box);return{x:point.x+dx/scale,y:point.y+dy/scale};}return null;
+}
+function renderCues(){
+ if(!network)return;$('#map-cues').replaceChildren();layoutStations();
+ const offsets=[[28,-23],[-28,-23],[34,23],[-34,23],[0,-37],[0,35]];
+ let displayed=0;for(const t of [...trains.values()].sort((a,b)=>(b.delay?.seconds||0)-(a.delay?.seconds||0))){
+  if(!t.position||!enabledLine(t.raw.line)||!(t.delay?.seconds>=60))continue;
+  if(focus==='all'&&displayed>=8)break;
+  const text='+'+Math.round(t.delay.seconds/60)+'m',p=placeCue(t.last,text,offsets);if(!p)continue;
+  make('path',{class:'cue-leader',d:`M${t.last.x} ${t.last.y} L${p.x} ${p.y}`},$('#map-cues'));badge(p.x,p.y,text,t.delay.seconds>=300,()=>chooseTrain(t.raw.id));displayed++;
+ }
+ for(const[id,list]of Object.entries(snapshot?.trips.departures||{})){
+  const s=network.stations[id];if(!s||!enabledStation(s)||stationNodes.get(id)?.el.getAttribute('visibility')!=='visible')continue;
+  const gap=serviceGaps(list.filter(d=>enabledLine(d.line)),now())[0];if(!gap)continue;
+  const text='◷ '+Math.round(gap.seconds/60)+'m',p=placeCue(s,text,[[0,28],[32,-23],[-32,-23]]);if(p)badge(p.x,p.y,text,false,()=>chooseStation(id));
+ }
+}
+function renderStation(){
+ if(!network||!selected)return;
+ const station=network.stations[selected];if(!station)return;
+ $('#station-meta').textContent=station.agencies.map(a=>AGENCY_BY_ID[a].name).join(' · ')+' · live predictions when available';
+ const rows=(snapshot?.trips.departures[selected]||[]).filter(d=>fresh(d.timestamp)&&d.time>=now()/1000-15).slice(0,12);
+ $('#departures').innerHTML=rows.length?rows.map(d=>{const l=network.lines[d.line];return `<div class="departure"><span class="route-dot" style="--route-color:${color(l.color)}">${esc(l.name.slice(0,2))}</span><div><h4>${esc(d.headsign)}</h4><small>${esc(AGENCY_BY_ID[l.agency].short+' · '+l.name+(d.platform?' · Platform '+d.platform:''))}</small></div><span class="eta">${eta(d.time)}<small>${d.delay>=60?'+'+Math.round(d.delay/60)+'m late':''}</small></span></div>`;}).join(''):'<p class="empty-state">No fresh departures are reported for this stop right now. Scheduled services may still operate.</p>';
+ const gaps=serviceGaps(rows,now());$('#gap-card').hidden=!gaps.length;$('#gap-details').innerHTML=gaps.slice(0,3).map(g=>`<p><strong>${Math.round(g.seconds/60)} min gap</strong> · ${esc(network.lines[g.line]?.name||'')} toward ${esc(g.headsign)}${g.scheduledSeconds?' · '+Math.round(g.scheduledSeconds/60)+' min scheduled':''}</p>`).join('');
+ renderTrainCard();
+}
+function renderTrainCard(){
+ $('#train-card').hidden=!followed;if(!followed)return;
+ const t=trains.get(followed),list=$('#upcoming-stops');
+ if(!t){$('#train-name').textContent='Trip no longer reported';$('#train-detail').textContent='This trip left the latest feed.';$('#train-delay').textContent='';list.replaceChildren();upcomingRows.clear();$('#upcoming-empty').hidden=false;$('#upcoming-empty').textContent='No current predictions.';return;}
+ if(list.dataset.train!==followed){list.replaceChildren();upcomingRows.clear();list.dataset.train=followed;}
+ const meta=network.lines[t.raw.line];$('#vehicle-label').textContent='Selected '+(meta.mode==='ferry'?'ferry':meta.mode==='bus'?'bus':'train');$('#train-name').textContent=AGENCY_BY_ID[t.raw.agency].short+' · '+t.raw.headsign;
+ $('#train-detail').textContent=t.position?`${t.raw.routeName||meta.name} · ${t.position.method} · source ${age(t.position.timestamp)}.`:'Location source stale or unavailable. The last position is frozen.';
+ const delay=t.position?trainDelay(t.raw,now()):null;$('#train-delay').textContent=delay?(delay.seconds>=60?'Reported +'+Math.round(delay.seconds/60)+'m late':delay.seconds<0?'Reported early':'Reported on time')+' at '+(network.stations[delay.station]?.name||'next stop')+'.':'Delay not reported for the next stop.';$('#train-delay').className='train-delay'+(delay?.seconds>=300?' severe':delay?.seconds>=60?' late':'');
+ const stops=remainingStops(t.raw,t.position,now()),keys=new Set();$('#upcoming-empty').hidden=!!stops.length;$('#upcoming-empty').textContent='No fresh upcoming-stop predictions.';
+ stops.forEach((stop,index)=>{const key=stop.sequence+':'+stop.station;keys.add(key);let row=upcomingRows.get(key);
+  if(!row){const el=document.createElement('li'),button=document.createElement('button'),name=document.createElement('span'),detail=document.createElement('span'),time=document.createElement('span');button.className='upcoming-stop';name.className='stop-name';detail.className='stop-meta';time.className='stop-eta';button.append(name,detail,time);el.append(button);button.addEventListener('click',()=>chooseStation(stop.station));row={el,button,name,detail,time};upcomingRows.set(key,row);}
+  row.name.textContent=network.stations[stop.station]?.name||stop.station;row.detail.textContent=(stop.platform?(stop.platformSource==='scheduled'?'Scheduled platform ':'Platform ')+stop.platform:'Platform not reported')+(stop.time==null?' · ETA unavailable':'');row.time.textContent=eta(stop.time);row.button.setAttribute('aria-label',row.name.textContent+', '+row.time.textContent+', '+row.detail.textContent);if(list.children[index]!==row.el)list.insertBefore(row.el,list.children[index]||null);
  });
+ for(const[key,row]of upcomingRows)if(!keys.has(key)){row.el.remove();upcomingRows.delete(key);}
 }
-function ageLabel(timestamp){if(!timestamp)return 'Unavailable';const age=Math.max(0,Math.floor(now()/1000-timestamp));return age<60?`${age}s ago`:`${Math.floor(age/60)}m ${age%60}s ago`}
+function activeAlerts(){return(snapshot?.alerts.items||[]).filter(a=>focus==='all'?a.agencies?.some(enabledAgency)||a.lines.some(enabledLine):a.agencies?.includes(focus)||a.lines.some(enabledLine));}
 function renderStatus(){
- const status=predictionStatus(),alertsStatus=snapshot?sourceState(snapshot.alerts.timestamp,now(),ALERT_MAX_AGE):'unavailable';
- $('#connection').className='connection '+status;
- $('#connection-text').textContent=!snapshot?'Connecting':status==='live'?(snapshot.trips.error?'Reconnecting':'Live BART'):status==='stale'?'Source stale':'Feed unavailable';
- document.body.classList.toggle('stale-feed',status!=='live');
- $('#map-key-text').textContent=status==='live'?(paused?'Motion paused · estimates':'Estimated train positions'):status==='stale'?'Source stale · motion frozen':'Waiting for live data';
- $('#train-count').textContent=status==='live'?snapshot.trips.counts.positionedTrips:'—';
- const advisoryCount=alertsStatus==='live'?snapshot.alerts.items.length:null;
- $('#advisory-count').hidden=advisoryCount===0||!snapshot;
- $('#advisory-count').textContent=advisoryCount===null?'!':String(advisoryCount);
- $('#service').setAttribute('aria-label',advisoryCount===null?'Service and data status. Alert feed unavailable':`Service and data status. ${advisoryCount} active ${advisoryCount===1?'advisory':'advisories'}`);
- $('#trip-age').textContent=ageLabel(snapshot?.trips.timestamp);$('#alert-age').textContent=ageLabel(snapshot?.alerts.timestamp);
- $('#trip-age').title=snapshot?.trips.fetchedAt?'Last fetched '+new Date(snapshot.trips.fetchedAt).toISOString():'';
- $('#alert-age').title=snapshot?.alerts.fetchedAt?'Last fetched '+new Date(snapshot.alerts.fetchedAt).toISOString():'';
- const c=$('#status-card');c.className='status-card'+(status!=='live'?' stale':'');
- if(!snapshot)setHTML(c,'<h3>Connecting to the source</h3><p>No train estimates are shown until BART provides a fresh feed.</p>');
- else if(status!=='live')setHTML(c,`<h3>${status==='stale'?'Source data is stale':'The live feed is unavailable'}</h3><p>${esc(snapshot.trips.error||'The source timestamp is outside the freshness window.')} Estimates ${trains.size?'are frozen':'will appear when fresh data returns'}.</p>`);
- else if(alertsStatus!=='live')setHTML(c,'<h3>Departures are live</h3><p>Service-alert data is unavailable or stale. The absence of alert markers does not establish normal service.</p>');
- else if(snapshot.alerts.items.length)setHTML(c,`<h3>${snapshot.alerts.items.length} active service ${snapshot.alerts.items.length===1?'advisory':'advisories'}</h3><p>Read BART’s notices below. Markers follow the scope reported in each alert.</p>`);
- else setHTML(c,'<h3>No active advisories reported</h3><p>BART’s current alert feed contains no active notices.</p>');
- const list=$('#alerts-list');list.replaceChildren();
- if(alertsStatus==='live'){
-  const items=snapshot.alerts.items;
-  items.slice(0,8).forEach(a=>{const el=document.createElement('article');el.className='alert-item';el.innerHTML=`${a.header?'<h4>'+esc(a.header)+'</h4>':''}<p>${esc(a.description||'See BART for details.')}</p>`;list.appendChild(el)});
- }
- $('#matching').textContent=snapshot?`${snapshot.trips.counts.matchedTrips} matched trips · ${snapshot.trips.counts.unmatchedTrips} unmatched · ${snapshot.trips.counts.positionedTrips} position estimates at last refresh.`:'Matching BART trips to the schematic.';
- $('#schedule-note').textContent=snapshot?.schedule.warning||'';
- if(snapshot?.provider==='511'){$('#data-source-link').href='https://511.org/open-data/transit';$('#data-source-link').textContent='511.org';}
- renderAlerts(alertsStatus);
- if(status!==lastStatus){lastStatus=status;$('#announcer').textContent=$('#connection-text').textContent;applyFocus(focusLine);renderDepartures()}
+ if(!snapshot)return;const live=fresh(snapshot.trips.timestamp)||fresh(snapshot.vehicles.timestamp),alerts=activeAlerts(),count=Object.values(snapshot.trips.byAgency||{}).reduce((sum,a)=>sum+a.positioned,0);
+ $('#connection-text').textContent=live?'Live '+(focus==='all'?'Bay Area':AGENCY_BY_ID[focus].short):'Feed delayed';$('#connection-dot').className='dot '+(live?'live':'stale');
+ $('#alert-count').hidden=!alerts.length;$('#alert-count').textContent=alerts.length;
+ $('#status-card').innerHTML=`<h3>${live?'The Bay Area, in motion.':'Waiting for fresh transit data.'}</h3><p>${live?count+' reported or estimated vehicle positions across seven networks.':'Last positions stay frozen while the feeds recover.'} Choose a network to explore its routes.</p>`;
+ $('#network-health').innerHTML=AGENCIES.map(a=>{const list=[...trains.values()].filter(t=>t.raw.agency===a.id),reported=list.filter(t=>t.raw.position&&fresh(t.raw.position.timestamp)).length,positioned=list.filter(t=>t.raw.position&&fresh(t.raw.position.timestamp)||sourceState(t.raw.timestamp,now(),180)==='live'&&t.raw.stops.some(s=>(s.departure??s.arrival)>=now()/1000)).length;return `<div class="health-row"><span>${esc(a.name)}</span><span>${live?positioned:0} active · ${live?reported:0} reported</span></div>`;}).join('');
+ $('#alerts-list').innerHTML=sourceState(snapshot.alerts.timestamp,now(),900)==='live'?(alerts.length?alerts.map(a=>`<article class="alert-item"><h4>${esc(a.header)}</h4><p>${esc(a.description)}</p></article>`).join(''):'<p class="empty-state">No active alerts are reported for this view.</p>'):'<p class="empty-state">Service alert source is stale or unavailable.</p>';
+ $('#trip-age').textContent='Stop predictions · '+age(snapshot.trips.timestamp)+(snapshot.trips.error?' · fetch delayed':'');$('#vehicle-age').textContent='Vehicle locations · '+age(snapshot.vehicles.timestamp)+(snapshot.vehicles.error?' · fetch delayed':'');$('#alert-age').textContent='Service alerts · '+age(snapshot.alerts.timestamp);$('#matching').textContent='All networks share the regional feed. Locations and predictions refresh about every 2½ minutes.';$('#schedule-note').textContent=snapshot.schedule.warning||'';
+ const date=new Date(now());$('.clock').textContent=new Intl.DateTimeFormat('en-GB',{timeZone:'America/Los_Angeles',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date);$('.clock').setAttribute('datetime',date.toISOString());
 }
-function renderAlerts(status){
- const overlay=$('#alert-overlay');overlay.replaceChildren();overlay.removeAttribute('hidden');
- if(status!=='live')return;
- const marked=new Set();
- for(const a of snapshot.alerts.items){
-  // A broad route alert gets a line badge in the notices; it must not invent a location.
-  for(const id of a.stations){const s=stations[id];if(!s||marked.has(id))continue;marked.add(id);make('circle',{class:'delay-halo',cx:s.x,cy:s.y,r:29,style:`transform-origin:${s.x}px ${s.y}px`},overlay);}
- }
-}
-function createTrain(raw){
- const r=definitions.find(r=>r.id===raw.line);if(!r)return null;
- const el=make('g',{class:'train',tabindex:0,role:'button',visibility:'hidden','aria-label':`${r.name} line to ${raw.headsign}, estimated position`},$('#trains'));
- make('title',{},el).textContent=`${r.name} → ${raw.headsign} · estimated position`;
- make('rect',{class:'train-outline',x:-17,y:-10.5,width:34,height:21,rx:6},el);make('circle',{class:'train-hit',r:20},el);make('rect',{class:'car',x:-12,y:-5.5,width:24,height:11,rx:1,fill:r.color},el);make('rect',{class:'window',x:5,y:-2.5,width:3,height:5,rx:.5},el);
- const t={raw,route:r,el,segment:null,positioned:false,pos:null,delay:null,badge:null};
- const activate=()=>selectTrain(t);
- t.badge=createCueBadge('delay',activate);
- el.addEventListener('click',activate);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();activate()}});return t;
-}
-function acceptSnapshot(value){
- snapshot=value;
- const ids=new Set(value.trips.trains.map(t=>t.id));
- for(const [id,t] of trains)if(!ids.has(id)){t.el.remove();t.badge.el.remove();trains.delete(id)}
- for(const raw of value.trips.trains){if(trains.has(raw.id))trains.get(raw.id).raw=raw;else {const t=createTrain(raw);if(t)trains.set(raw.id,t)}}
- applyFocus(focusLine);renderStatus();refreshCues();renderDepartures();updateTrainCard();
-}
+function projectNetwork(){network.projectionAngle=innerWidth<=650?0:25;for(const s of Object.values(network.stations))Object.assign(s,project(s.lat,s.lon,network.projectionAngle));}
+async function loadNetwork(){const r=await fetch('/api/network',{signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('Network unavailable');network=await r.json();projectNetwork();buildMap();}
 async function poll(){
- if(fetching)return;fetching=true;$('#refresh').disabled=true;$('#refresh').textContent='Refreshing…';
- const began=Date.now();
- try{
-  const response=await fetch('/api/live',{cache:'no-store',signal:AbortSignal.timeout(25000)});const data=await response.json();
-  if(!response.ok||!data.trips)throw new Error(data.error||'The feed request failed');
-  // A server timestamp is returned even when the cached feed is reused.
-  clockOffset=data.serverTime-(began+Date.now())/2;acceptSnapshot(data);
- }catch(e){
-  if(!snapshot){snapshot={trips:{timestamp:null,trains:[],departures:{},counts:{matchedTrips:0,unmatchedTrips:0,positionedTrips:0},error:e.message},alerts:{timestamp:null,items:[]},schedule:{warning:null}};renderStatus();renderDepartures()}
-  else {snapshot.trips.error='Connection interrupted; retrying automatically.';renderStatus()}
- }finally{fetching=false;$('#refresh').disabled=false;$('#refresh').textContent='Refresh now';clearTimeout(pollTimer);pollTimer=setTimeout(poll,20000)}
+ if(fetching||!network)return;fetching=true;clearTimeout(timer);
+ try{const response=await fetch('/api/live',{cache:'no-store',signal:AbortSignal.timeout(25000)});if(!response.ok)throw Error('Feed unavailable');const value=await response.json();if(value.schedule.networkVersion!==network.builtAt)await loadNetwork();snapshot=value;clockOffset=snapshot.serverTime-Date.now();syncTrains();message('');renderVehicles(performance.now());renderStatus();renderStation();renderCues();}
+ catch{if(!snapshot)message('The live feed is taking longer to connect. Retrying shortly…');$('#connection-text').textContent='Connection delayed';$('#connection-dot').className='dot stale';}
+ finally{fetching=false;timer=setTimeout(poll,20000);}
 }
-function applyFocus(id){
- focusLine=id;
- document.querySelectorAll('[data-line]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.line===id));
- definitions.forEach(r=>r.path.style.opacity=id==='all'||r.id===id?'1':'.12');
- document.querySelectorAll('[data-airport-line]').forEach(p=>p.style.opacity=id==='all'||p.dataset.airportLine===id?'1':'.12');
- $('.connector').style.opacity=id==='all'?'1':'.12';
- const route=definitions.find(r=>r.id===id);
- for(const t of trains.values())t.el.style.opacity=id==='all'||t.route.id===id?(predictionStatus()==='live'?'1':'.3'):'.06';
- Object.values(stations).forEach(s=>s.el.style.opacity=!route||route.ids.includes(s.id)||(['red','yellow'].includes(id)&&['SFIA','MLBR'].includes(s.id))?'1':'.18');
- $('#line-caption').textContent=route?`${route.name} · ${route.ends.join(' / ')}`:'All lines';renderGapCard();layoutCues();
-}
-function positionAt(r,segment){
- const a=r.distances[segment.from],b=r.distances[segment.to];
- if(a!=null&&b!=null){const distance=a+(b-a)*segment.progress,p=r.path.getPointAtLength(distance),ahead=r.path.getPointAtLength(Math.max(0,Math.min(r.length,distance+(b>=a?2:-2))));return {x:p.x,y:p.y,angle:Math.atan2(ahead.y-p.y,ahead.x-p.x)*180/Math.PI};}
- const branch=r.branches.find(item=>item.ids.includes(segment.from)&&item.ids.includes(segment.to));
- if(branch){const progress=segment.from===branch.ids[0]?segment.progress:1-segment.progress,distance=progress*branch.length,p=branch.path.getPointAtLength(distance),ahead=branch.path.getPointAtLength(Math.max(0,Math.min(branch.length,distance+(segment.from===branch.ids[0]?2:-2))));return{x:p.x,y:p.y,angle:Math.atan2(ahead.y-p.y,ahead.x-p.x)*180/Math.PI}}
- return null;
-}
-function createCueBadge(kind,activate){
- const el=make('g',{class:'cue-badge '+kind+'-badge',role:'button',tabindex:-1,visibility:'hidden','aria-hidden':'true'},$('#map-cues'));
- const title=make('title',{},el),leader=make('path',{class:'cue-leader'},el),content=make('g',{class:'cue-content'},el),plate=make('rect',{class:'cue-plate',y:-10,height:20,rx:10},content);
- const clock=make('g',{class:'cue-clock'},content);make('circle',{r:5},clock);make('path',{d:'M0 -3V0L2 1'},clock);
- const text=make('text',{class:'cue-text',y:4,'text-anchor':'middle'},content);
- if(kind!=='gap')clock.setAttribute('display','none');
- el.addEventListener('click',activate);el.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activate()}});
- return{el,title,leader,content,plate,clock,text,kind,shown:false,gap:null};
-}
-function hideCue(badge){if(!badge)return;badge.shown=false;badge.el.setAttribute('visibility','hidden');badge.el.setAttribute('aria-hidden','true');badge.el.setAttribute('tabindex','-1')}
-function refreshCues(){
- gapsByStation.clear();
- if(predictionStatus()==='live')for(const [id,items]of Object.entries(snapshot.trips.departures)){
-  const gaps=serviceGaps(items,now());if(gaps.length)gapsByStation.set(id,gaps);
- }
- for(const t of trains.values()){
-  t.delay=predictionStatus()==='live'?trainDelay(t.raw,now()):null;
-  t.el.classList.toggle('late',t.delay?.seconds>=60);t.el.classList.toggle('severe',t.delay?.seconds>=300);
-  t.el.setAttribute('aria-label',`${t.route.name} line to ${t.raw.headsign}, estimated position${t.delay?.seconds>=60?', '+delayText(t.delay.seconds):''}`);
- }
- renderGapCard();layoutCues();
-}
-// Place fixed-size labels in clear screen space, preserving station names.
-function layoutCues(){
- const map=$('#map'),rect=map.getBoundingClientRect(),width=rect.width||innerWidth,height=rect.height||innerHeight,left=rect.left||0,top=rect.top||0;
- const scale=Math.min(width/vb.w,height/vb.h)||1,offsetX=left+(width-vb.w*scale)/2,offsetY=top+(height-vb.h*scale)/2;
- const screen=point=>({x:offsetX+(point.x-vb.x)*scale,y:offsetY+(point.y-vb.y)*scale});
- const occupied=[];
- for(const element of document.querySelectorAll('.hud,.controls,.route-palette,.map-caption,.phone-map-hint,.inspector:not([hidden])')){
-  const box=element.getBoundingClientRect();if(box.width&&box.height)occupied.push({x:box.left-3,y:box.top-3,w:box.width+6,h:box.height+6});
- }
- for(const s of Object.values(stations)){
-  const point=screen(s),radius=Math.max(13,16*scale);occupied.push({x:point.x-radius,y:point.y-radius,w:radius*2,h:radius*2});
-  const style=getComputedStyle(s.label),box=s.label.getBoundingClientRect();
-  if(style.visibility!=='hidden'&&Number(style.opacity)>0&&box.width)occupied.push({x:box.left-3,y:box.top-2,w:box.width+6,h:box.height+4});
-  hideCue(s.gapBadge);
- }
- for(const t of trains.values()){
-  hideCue(t.badge);
-  if(t.pos&&t.el.getAttribute('visibility')==='visible'){const p=screen(t.pos),radius=Math.max(13,16*scale);occupied.push({x:p.x-radius,y:p.y-radius,w:radius*2,h:radius*2})}
- }
- if(predictionStatus()!=='live')return;
- const tasks=[];
- for(const t of trains.values())if(t.delay?.seconds>=60&&t.pos&&t.el.getAttribute('visibility')==='visible'&&(focusLine==='all'||t.route.id===focusLine)){
-  tasks.push({badge:t.badge,anchor:t.pos,label:'+'+Math.max(1,Math.round(t.delay.seconds/60))+'m',description:`${t.route.name} to ${t.raw.headsign}. ${delayText(t.delay.seconds)} reported at ${stations[t.delay.station]?.name||t.delay.station}. Show upcoming stops.`,severe:t.delay.seconds>=300,priority:t.raw.id===followed?100000:t.delay.seconds+1000});
- }
- for(const [id,gaps]of gapsByStation){
-  const s=stations[id],gap=gaps.find(g=>focusLine==='all'||g.line===focusLine);if(!s||!gap)continue;
-  s.gapBadge.gap=gap;s.gapBadge.el.setAttribute('data-gap-station',id);
-  tasks.push({badge:s.gapBadge,anchor:s,label:Math.round(gap.seconds/60)+'m gap',description:`${s.name}: predicted ${Math.round(gap.seconds/60)} minute gap on the ${gap.line} line toward ${gap.headsign}. Show departures.`,severe:false,priority:gap.seconds});
- }
- tasks.sort((a,b)=>b.priority-a.priority);
- const intersects=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
- for(const task of tasks){
-  const {badge}=task,anchor=screen(task.anchor);
-  if(anchor.x<left||anchor.x>left+width||anchor.y<top||anchor.y>top+height)continue;
-  const w=Math.ceil(Math.max(badge.kind==='gap'?64:36,task.label.length*(badge.kind==='gap'?6.5:7)+(badge.kind==='gap'?28:16))),h=20;
-  const candidates=badge.kind==='gap'?[[0,30],[0,-30],[56,0],[-56,0],[56,30],[-56,30],[56,-30],[-56,-30],[0,52],[0,-52],[80,16],[-80,16]]:[[0,-24],[0,24],[36,-24],[-36,-24],[42,24],[-42,24],[58,0],[-58,0],[0,-46],[0,46],[70,-22],[-70,-22]];
-  const candidate=candidates.find(([dx,dy])=>{const box={x:anchor.x+dx-w/2-2,y:anchor.y+dy-h/2-2,w:w+4,h:h+4};return box.x>=left+8&&box.x+box.w<=left+width-8&&box.y>=top+8&&box.y+box.h<=top+height-8&&!occupied.some(other=>intersects(box,other))});
-  if(!candidate)continue;
-  const [dx,dy]=candidate;occupied.push({x:anchor.x+dx-w/2-2,y:anchor.y+dy-h/2-2,w:w+4,h:h+4});
-  badge.shown=true;badge.el.setAttribute('visibility','visible');badge.el.setAttribute('aria-hidden','false');badge.el.setAttribute('tabindex','0');badge.el.setAttribute('aria-label',task.description);badge.title.textContent=task.description;
-  badge.el.classList.toggle('severe',task.severe);badge.el.setAttribute('transform',`translate(${task.anchor.x} ${task.anchor.y})`);
-  badge.content.setAttribute('transform',`translate(${dx/scale} ${dy/scale}) scale(${1/scale})`);
-  badge.plate.setAttribute('x',-w/2);badge.plate.setAttribute('width',w);badge.text.textContent=task.label;badge.text.setAttribute('x',badge.kind==='gap'?7:0);
-  badge.clock.setAttribute('transform',`translate(${-w/2+11} 0)`);
-  const distance=Math.hypot(dx,dy),start=Math.min(.9,Math.max(12,16*scale)/distance);
-  badge.leader.setAttribute('d',`M${dx*start/scale} ${dy*start/scale}L${dx/scale} ${dy/scale}`);badge.leader.setAttribute('stroke-width',1/scale);
- }
-}
-
-function selectTrain(t){
- for(const other of trains.values())other.el.classList.remove('followed');
- followed=t.raw.id;t.el.classList.add('followed');
- const next=t.segment?.to||upcomingStops(t.raw,now())[0]?.station;
- if(next)chooseStation(next,{open:false,keepTrain:true});
- $('#train-card').hidden=false;openInspector('station',t.el);$('#panel-title').textContent='Train details';updateTrainCard();layoutCues();
-}
-function etaText(time){if(time==null)return '—';const seconds=time-now()/1000;return seconds<=20?'Due':Math.ceil(seconds/60)+'m'}
-function delayText(seconds){
- if(seconds==null)return 'Delay not reported';
- if(seconds===0)return 'Reported on time';
- const value=Math.abs(Math.round(seconds)),minutes=Math.floor(value/60),remainder=value%60;
- return `${minutes?minutes+'m ':''}${remainder||!minutes?remainder+'s ':''}${seconds>0?'late':'early'}`;
-}
-function renderGapCard(){
- const gaps=(gapsByStation.get(selectedStation)||[]).filter(g=>focusLine==='all'||g.line===focusLine);
- $('#gap-card').hidden=!gaps.length;
- setHTML($('#gap-details'),gaps.map(g=>{
-  const route=definitions.find(r=>r.id===g.line),selected=selectedGapKey===g.key;
-  return `<article class="gap-detail${selected?' chosen':''}"><h4><span class="route-dot" style="background:${route.color}"></span>${esc(route.name)} · ${esc(g.headsign)}</h4><p><strong>${Math.round(g.seconds/60)} min gap</strong> · next ${etaText(g.next.time)}, then ${etaText(g.following.time)}</p><p class="gap-comparison">${g.scheduledSeconds==null?'Schedule comparison unavailable.':Math.round(g.scheduledSeconds/60)+' min scheduled between these trains.'} Calculated from departure predictions.</p></article>`;
- }).join(''));
-}
-function updateTrainCard(){
- if(!followed)return;const t=trains.get(followed),list=$('#upcoming-stops'),emptyState=$('#upcoming-empty');
- if(list.dataset.train!==followed){list.replaceChildren();upcomingRows.clear();list.dataset.train=followed}
- if(!t){$('#train-name').textContent='Trip no longer reported';$('#train-detail').textContent='This trip is no longer in the latest feed.';$('#train-delay').textContent='';list.replaceChildren();upcomingRows.clear();emptyState.hidden=false;emptyState.textContent='No current stop predictions.';return}
- $('#train-name').textContent=`${t.route.name} · ${t.raw.headsign}`;
- const fresh=predictionStatus()==='live'&&sourceState(t.raw.timestamp,now())==='live',s=t.segment;
- $('#train-detail').textContent=!fresh?'Source stale or unavailable. The last estimated position is frozen.':s?`${s.from===s.to?'At':'Approaching'} ${stations[s.to]?.name||s.to}. Estimated position · source ${ageLabel(t.raw.timestamp)}.`:'Position cannot be resolved to a station interval.';
- const reported=fresh?trainDelay(t.raw,now()):null;
- $('#train-delay').textContent=!fresh?'Fresh delay information unavailable.':reported?`${delayText(reported.seconds)} at ${stations[reported.station]?.name||reported.station}${reported.uncertainty>0?' · timing uncertainty '+reported.uncertainty+'s':''}.`:'Delay not reported for the next stop.';
- $('#train-delay').className='train-delay'+(reported?.seconds>=300?' severe':reported?.seconds>=60?' late':'');
- const stops=fresh?upcomingStops(t.raw,now()):[],keys=new Set();
- emptyState.hidden=!!stops.length;emptyState.textContent=fresh?'No remaining stop predictions.':'Upcoming ETAs will return with fresh predictions.';
- stops.forEach((stop,index)=>{
-  const key=stop.sequence+':'+stop.station;keys.add(key);let row=upcomingRows.get(key);
-  if(!row){
-   const el=document.createElement('li'),button=document.createElement('button'),name=document.createElement('span'),meta=document.createElement('span'),eta=document.createElement('span');
-   button.className='upcoming-stop';name.className='stop-name';meta.className='stop-meta';eta.className='stop-eta';button.append(name,meta,eta);el.append(button);button.addEventListener('click',()=>chooseStation(stop.station));
-   row={el,button,name,meta,eta};upcomingRows.set(key,row);
-  }
-  row.name.textContent=stations[stop.station]?.name||stop.station;
-  const platform=stop.platform?`${stop.platformSource==='scheduled'?'Scheduled platform':'Platform'} ${stop.platform}`:'Platform not reported';
-  row.meta.textContent=platform+(stop.station===t.raw.terminal?' · final stop':'')+(stop.time==null?' · ETA unavailable':'');
-  row.eta.textContent=stop.atStation?'Now':etaText(stop.time);
-  row.button.setAttribute('aria-label',`${row.name.textContent}, ${row.eta.textContent==='—'?'ETA unavailable':row.eta.textContent}, ${platform}. Show station departures.`);
-  if(list.children[index]!==row.el)list.insertBefore(row.el,list.children[index]||null);
- });
- for(const [key,row]of upcomingRows)if(!keys.has(key)){row.el.remove();upcomingRows.delete(key)}
-}
-const clockFormatter=new Intl.DateTimeFormat('en-GB',{timeZone:'America/Los_Angeles',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
-function renderClock(){
- const date=new Date(now()),text=clockFormatter.format(date),[hour,minute]=text.split(':').map(Number);
- $('.clock').textContent=text;$('.clock').setAttribute('datetime',date.toISOString());
- $('#hour-hand').setAttribute('transform',`rotate(${(hour%12)*30+minute/2} 20 20)`);
- $('#minute-hand').setAttribute('transform',`rotate(${minute*6} 20 20)`);
-}
-function frame(time){
- if(predictionStatus()==='live')for(const t of trains.values()){
-  // Reduced-motion users still get one position per trip, without interpolation.
-  if(paused&&t.positioned)continue;
-  const segment=inferSegment(t.raw,now());t.segment=segment;
-  if(!segment){t.el.setAttribute('visibility','hidden');t.pos=null;hideCue(t.badge);continue}
-  const pos=positionAt(t.route,segment);if(!pos){t.el.setAttribute('visibility','hidden');t.pos=null;hideCue(t.badge);continue}
-  t.pos=pos;if(t.badge.shown)t.badge.el.setAttribute('transform',`translate(${pos.x} ${pos.y})`);t.positioned=true;t.el.setAttribute('visibility','visible');t.el.setAttribute('transform',`translate(${pos.x} ${pos.y}) rotate(${pos.angle})`);
- }
- if(time-lastPanelUpdate>1000){lastPanelUpdate=time;renderStatus();refreshCues();renderDepartures();updateTrainCard();renderClock()}
- requestAnimationFrame(frame);
-}
-let vb={x:-60,y:-150,w:1280,h:1120};const mobile=()=>innerWidth<=650;
-function setView(overview=false){vb=mobile()&&!overview?{x:130,y:-65,w:510,h:980}:{x:-60,y:-150,w:1280,h:1120};drawView()}
-function drawView(){
- const map=$('#map');map.setAttribute('viewBox',`${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
- const rect=map.getBoundingClientRect(),width=rect.width||innerWidth,height=rect.height||innerHeight;
- const scale=Math.min(width/vb.w,height/vb.h);map.style.setProperty('--station-font',`${Math.min(30,14/scale)}px`);
- const visibleLeft=vb.x-(width/scale-vb.w)/2,visibleRight=visibleLeft+width/scale;
- const visibleTop=vb.y-(height/scale-vb.h)/2,visibleBottom=visibleTop+height/scale;
- for(const s of Object.values(stations)){
-  const p=labelPosition(s.id,mobile());
-  s.leader.setAttribute('d',p.leader||'');
-  s.label.setAttribute('x',p.x);s.label.setAttribute('y',p.y);s.label.setAttribute('text-anchor',p.anchor);
-  s.label.setAttribute('transform',p.angle?`rotate(${p.angle} ${p.x} ${p.y})`:'');
-  const visibility=s.x>=visibleLeft&&s.x<=visibleRight&&s.y>=visibleTop&&s.y<=visibleBottom?'visible':'hidden';s.label.style.visibility=visibility;s.leader.style.visibility=visibility;
- }
- layoutCues();
-}
-function pointInView(point,view=vb){
- const rect=$('#map').getBoundingClientRect(),scale=Math.min(rect.width/view.w,rect.height/view.h)||1;
- return{x:view.x+(point.x-rect.left-(rect.width-view.w*scale)/2)/scale,y:view.y+(point.y-rect.top-(rect.height-view.h*scale)/2)/scale};
-}
-function zoom(factor,point){
- const anchor=point?pointInView(point):{x:vb.x+vb.w/2,y:vb.y+vb.h/2},w=Math.max(300,Math.min(2200,vb.w*factor)),ratio=w/vb.w;
- vb={x:anchor.x-(anchor.x-vb.x)*ratio,y:anchor.y-(anchor.y-vb.y)*ratio,w,h:vb.h*ratio};drawView();
-}
-const pointers=new Map();let gesture=null;
-function beginGesture(){
- const points=[...pointers.values()];
- if(points.length>=2){const [a,b]=points,center={x:(a.x+b.x)/2,y:(a.y+b.y)/2};gesture={kind:'pinch',distance:Math.max(1,Math.hypot(a.x-b.x,a.y-b.y)),anchor:pointInView(center),view:{...vb}};}
- else if(points.length===1)gesture={kind:'pan',start:points[0],view:{...vb},moved:false};
- else gesture=null;
-}
-$('#map').addEventListener('pointerdown',e=>{
- if(e.button>0||e.target.closest('.station,.train,.cue-badge'))return;
- pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});$('#map').setPointerCapture(e.pointerId);beginGesture();
-});
-$('#map').addEventListener('pointermove',e=>{
- if(!pointers.has(e.pointerId)||!gesture)return;
- pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});const points=[...pointers.values()];
- if(gesture.kind==='pinch'&&points.length>=2){
-  const [a,b]=points,center={x:(a.x+b.x)/2,y:(a.y+b.y)/2},distance=Math.max(1,Math.hypot(a.x-b.x,a.y-b.y));
-  const w=Math.max(300,Math.min(2200,gesture.view.w*gesture.distance/distance));
-  vb={x:0,y:0,w,h:gesture.view.h*w/gesture.view.w};const local=pointInView(center);vb.x=gesture.anchor.x-local.x;vb.y=gesture.anchor.y-local.y;drawView();
- }else if(gesture.kind==='pan'){
-  const rect=$('#map').getBoundingClientRect(),scale=Math.min(rect.width/gesture.view.w,rect.height/gesture.view.h)||1;
-  const dx=e.clientX-gesture.start.x,dy=e.clientY-gesture.start.y;gesture.moved||=Math.hypot(dx,dy)>5;
-  vb.x=gesture.view.x-dx/scale;vb.y=gesture.view.y-dy/scale;drawView();
- }
-});
-function endPointer(e){if(!pointers.has(e.pointerId))return;const tapped=gesture?.kind==='pan'&&!gesture.moved;pointers.delete(e.pointerId);beginGesture();if(tapped&&!$('#inspector').hidden)closeInspector()}
-$('#map').addEventListener('pointerup',endPointer);
-$('#map').addEventListener('pointercancel',e=>{pointers.delete(e.pointerId);beginGesture()});
-$('#map').addEventListener('wheel',e=>{e.preventDefault();zoom(Math.exp(Math.max(-100,Math.min(100,e.deltaY))*.002),{x:e.clientX,y:e.clientY})},{passive:false});
-$('#station-select').addEventListener('change',e=>chooseStation(e.target.value));
-for(const button of document.querySelectorAll('[data-line]'))button.addEventListener('click',()=>applyFocus(button.dataset.line===focusLine?'all':button.dataset.line));
-$('#zoom-in').addEventListener('click',()=>zoom(.8));$('#zoom-out').addEventListener('click',()=>zoom(1.25));$('#reset').addEventListener('click',()=>setView(true));$('#refresh').addEventListener('click',poll);
-$('#close-panel').addEventListener('click',closeInspector);
-$('#station-finder').addEventListener('click',()=>{openInspector('station',$('#station-finder'));$('#station-select').focus({preventScroll:true})});
-for(const id of ['service','connection','view-service'])$('#'+id).addEventListener('click',()=>openInspector('network',$('#'+id)));
-function pauseButton(){
- const button=$('#pause');button.setAttribute('aria-pressed',paused);button.setAttribute('aria-label',paused?'Resume train motion':'Pause train motion');button.title=paused?'Resume motion (Space)':'Pause motion (Space)';
-}
-function togglePause(){paused=!paused;pauseButton();renderStatus()}
-function toggleLabels(){labels=!labels;document.body.classList.toggle('labels-on',labels);$('#labels').setAttribute('aria-pressed',labels);$('#labels').setAttribute('aria-label',labels?'Hide station names':'Show station names')}
-$('#pause').addEventListener('click',togglePause);$('#labels').addEventListener('click',toggleLabels);
-document.addEventListener('keydown',e=>{
- if(e.key==='Escape'&&!$('#inspector').hidden){e.preventDefault();closeInspector();return}
- if(e.target!==document.body&&e.target.closest('button,select,input,a,[role=button]'))return;
- if(e.code==='Space'){e.preventDefault();togglePause()}
- if(e.key.toLowerCase()==='l'){e.preventDefault();toggleLabels()}
-});
-let lastMobile=mobile();addEventListener('resize',()=>{if(lastMobile!==mobile()){lastMobile=mobile();setView()}else drawView()});
-addEventListener('online',poll);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
-document.body.classList.toggle('labels-on',labels);setView();pauseButton();chooseStation('EMBR',{open:false});renderClock();requestAnimationFrame(frame);poll();
+function animate(time){renderVehicles(time);if(time-lastTick>1000){lastTick=time;renderStatus();if(!$('#inspector').hidden)renderStation();renderCues();}requestAnimationFrame(animate);}
+function localPoint(x,y){const rect=bounds();return{x:view.x+(x-rect.left-(rect.width-view.w*scale)/2)/scale,y:view.y+(y-rect.top-(rect.height-view.h*scale)/2)/scale};}
+function zoom(factor,point){const p=point?localPoint(point.x,point.y):{x:view.x+view.w/2,y:view.y+view.h/2},w=Math.max(12,Math.min(6000,view.w*factor)),ratio=w/view.w;view={x:p.x-(p.x-view.x)*ratio,y:p.y-(p.y-view.y)*ratio,w,h:view.h*ratio};drawView();}
+const pointers=new Map();let gesture;
+function beginGesture(){const p=[...pointers.values()];gesture=p.length>1?{kind:'pinch',distance:Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y),anchor:localPoint((p[0].x+p[1].x)/2,(p[0].y+p[1].y)/2),view:{...view}}:p.length?{kind:'pan',point:p[0],view:{...view},moved:false}:null;}
+$('#map').addEventListener('pointerdown',e=>{if(e.button>0||e.target.closest('.station,.train,.cue-badge'))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});$('#map').setPointerCapture(e.pointerId);beginGesture();});
+$('#map').addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId)||!gesture)return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});const p=[...pointers.values()];if(gesture.kind==='pinch'&&p.length>1){const w=Math.max(12,Math.min(6000,gesture.view.w*gesture.distance/Math.max(1,Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y))));view={x:0,y:0,w,h:gesture.view.h*w/gesture.view.w};scale=Math.min(bounds().width/view.w,bounds().height/view.h);const c=localPoint((p[0].x+p[1].x)/2,(p[0].y+p[1].y)/2);view.x=gesture.anchor.x-c.x;view.y=gesture.anchor.y-c.y;}else{const dx=e.clientX-gesture.point.x,dy=e.clientY-gesture.point.y;gesture.moved||=Math.hypot(dx,dy)>5;view.x=gesture.view.x-dx/scale;view.y=gesture.view.y-dy/scale;}drawView(gesture.kind==='pinch');});
+$('#map').addEventListener('pointerup',e=>{const tap=gesture?.kind==='pan'&&!gesture.moved;pointers.delete(e.pointerId);beginGesture();if(tap)closePanel(false);});$('#map').addEventListener('pointercancel',e=>{pointers.delete(e.pointerId);beginGesture();});
+$('#map').addEventListener('wheel',e=>{e.preventDefault();zoom(Math.exp(Math.max(-100,Math.min(100,e.deltaY))*.002),{x:e.clientX,y:e.clientY});},{passive:false});
+$('#zoom-in').onclick=()=>zoom(.75);$('#zoom-out').onclick=()=>zoom(1.33);$('#reset').onclick=()=>network&&fit();
+ $('#buses').onclick=()=>{buses=!buses;focus='all';line='all';buildLineSelect();updateVisibility();fit();};$('#line-select').onchange=e=>{line=e.target.value;updateVisibility();fit();};
+$('#labels').onclick=()=>{labels=!labels;$('#labels').setAttribute('aria-pressed',String(labels));$('#labels').setAttribute('aria-label',labels?'Hide station names':'Show station names');layoutStations();};
+function togglePause(){paused=!paused;$('#pause').setAttribute('aria-pressed',String(paused));$('#pause').setAttribute('aria-label',paused?'Resume movement':'Pause movement');}
+$('#pause').onclick=togglePause;$('#pause').setAttribute('aria-pressed',String(paused));$('#pause').setAttribute('aria-label',paused?'Resume movement':'Pause movement');$('#close-panel').onclick=()=>closePanel();$('#station-select').onchange=e=>chooseStation(e.target.value);$('#station-search').oninput=()=>populateStations();$('#station-finder').onclick=()=>{if(!network)return;selected??=Object.values(network.stations).find(enabledStation)?.id;populateStations();openPanel('station');renderStation();$('#station-search').focus();};
+for(const id of ['service','connection','view-service'])$('#'+id).onclick=()=>{openPanel('network');renderStatus();};$('#refresh').onclick=poll;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closePanel();return;}if(e.target.closest('button,select,input,[role=button]'))return;if(e.code==='Space'){e.preventDefault();togglePause();}if(e.key.toLowerCase()==='l')$('#labels').click();});
+new MutationObserver(()=>updateVisibility()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});addEventListener('resize',()=>{if(!network)return;if(network.projectionAngle!==(innerWidth<=650?0:25)){projectNetwork();buildMap();if(snapshot)syncTrains();fit();}else drawView();});addEventListener('online',poll);document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
+async function start(){try{await loadNetwork();fit();await poll();requestAnimationFrame(animate);}catch{message('Could not load the transit map. Retrying shortly…');setTimeout(start,10000);}}
+document.fonts?.ready.then(()=>{if(network)drawView(false);});start();

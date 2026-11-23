@@ -45,10 +45,11 @@ test('static responses support conditional requests, HEAD and negotiated compres
   const head=await get('/map.js',{},'HEAD');assert.equal(head.status,200);assert.equal(Number(head.headers['content-length']),plain.body.length);assert.equal(head.body.length,0);
 });
 
-test('the live endpoint passes its server secret only to the adapter and hides failures',async t=>{
+test('network and live endpoints pass their server secret only to the adapters and hide failures',async t=>{
   const key='test-secret-never-published',snapshot={provider:'511',trips:{status:'live',trains:Array(30).fill({id:'fixture',line:'yellow'})}};
   let failing=false;
-  const get=await serve(t,{apiKey:key,snapshot:async options=>{assert.equal(options.apiKey,key);if(failing)throw new Error('upstream URL contained '+key);return snapshot;}});
+  const get=await serve(t,{apiKey:key,network:async options=>{assert.equal(options.apiKey,key);return {agencies:[{id:'BA'}]};},snapshot:async options=>{assert.equal(options.apiKey,key);if(failing)throw new Error('upstream URL contained '+key);return snapshot;}});
+  const network=await get('/api/network');assert.equal(network.status,200);assert.deepEqual(JSON.parse(network.body),{agencies:[{id:'BA'}]});assert.ok(!network.body.toString().includes(key));
   const live=await get('/api/live',{'Accept-Encoding':'gzip'});
   assert.equal(live.status,200);assert.equal(live.headers['cache-control'],'no-store');
   assert.deepEqual(JSON.parse(gunzipSync(live.body)),snapshot);

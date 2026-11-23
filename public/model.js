@@ -4,6 +4,7 @@ export const TRIP_MAX_AGE = 90;
 export const ALERT_MAX_AGE = 600;
 
 export function lineForRoute(id, schedule) {
+  if(schedule.regional)return schedule.routes?.[id]?.lineId||null;
   if (ROUTE_LINES[id]) return ROUTE_LINES[id];
   const route = schedule.routes?.[id];
   if (!route) return null;
@@ -39,7 +40,7 @@ export function pacificDate(timestamp) {
 // Only draw a train when the time interval resolves to two neighboring stations.
 // The times are predictions, so this is estimated progress, never a GPS fix.
 export function inferSegment(train, now) {
-  if (sourceState(train.timestamp, now) !== 'live' || train.cancelled) return null;
+  if (sourceState(train.timestamp, now,train.maxAge??TRIP_MAX_AGE) !== 'live' || train.cancelled) return null;
   const seconds = now / 1000;
   const stops = train.stops;
   for (let i = 0; i < stops.length; i++) {
@@ -77,7 +78,7 @@ function reportedNumber(event, field) {
 
 // Remaining scheduled stops stay visible, but only actual predictions get ETAs.
 export function upcomingStops(train, now) {
-  if (!train || train.cancelled || sourceState(train.timestamp,now)!=='live') return [];
+  if (!train || train.cancelled || sourceState(train.timestamp,now,train.maxAge??TRIP_MAX_AGE)!=='live') return [];
   const seconds=now/1000;
   const start=train.stops.findIndex(stop=>!stop.skipped && (stop.departure??stop.arrival)>=seconds);
   if(start<0)return [];
@@ -99,7 +100,7 @@ export function trainDelay(train,now) {
 export function serviceGaps(departures,now) {
   const groups=new Map(),seconds=now/1000;
   for(const departure of departures||[]){
-    if(!Number.isFinite(departure.time)||departure.time<seconds-15||departure.time>seconds+5400||sourceState(departure.timestamp,now)!=='live')continue;
+    if(!Number.isFinite(departure.time)||departure.time<seconds-15||departure.time>seconds+5400||sourceState(departure.timestamp,now,departure.maxAge??TRIP_MAX_AGE)!=='live')continue;
     const direction=departure.directionId??`${departure.routeId||''}:${departure.terminal||departure.headsign}`;
     const key=`${departure.line}:${departure.routeId||''}:${direction}`;
     if(!groups.has(key))groups.set(key,new Map());
@@ -122,7 +123,7 @@ export function serviceGaps(departures,now) {
 export function normalizeTrips(feed, schedule, now) {
   const timestamp = number(feed.header?.timestamp);
   const trains = [], departures = {}, cancelled = [];
-  let unmatched = 0, inactive = 0;
+  let unmatched = 0, inactive = 0, ignored = 0;
   const date = pacificDate(now);
   const yesterday = pacificDate(now - 86400000);
   for (const entity of feed.entity || []) {
@@ -130,16 +131,18 @@ export function normalizeTrips(feed, schedule, now) {
     if (!u || entity.isDeleted) continue;
     const raw = u.trip || {}, tripId = String(raw.tripId || '');
     const trip = schedule.trips[tripId];
+    if(schedule.regional&&!schedule.routes[raw.routeId||trip?.route]){ignored++;continue;}
     if (!trip || !lineForRoute(trip.route,schedule)) { unmatched++; continue; }
     const serviceDate = raw.startDate || (serviceActive(schedule, trip.service, date) ? date : yesterday);
     if (!serviceActive(schedule, trip.service, serviceDate)) { inactive++; continue; }
     const key = `${serviceDate}:${tripId}:${raw.startTime || ''}`;
     if (Number(raw.scheduleRelationship) === 3 || Number(raw.scheduleRelationship) === 7) {cancelled.push(key);continue;}
-    const observations = new Map((u.stopTimeUpdate || []).map(s => [s.stopId || `seq:${s.stopSequence}`, s]));
-    const byStation = new Map((u.stopTimeUpdate || []).filter(s=>s.stopId).map(s=>[schedule.parents[s.stopId]||s.stopId,s]));
+    const updates=u.stopTimeUpdate||[],bySequence=new Map(updates.filter(s=>s.stopSequence!=null).map(s=>[Number(s.stopSequence),s]));
+    const uniqueBy=key=>{const values=new Map();for(const s of updates){const id=key(s);if(id)values.set(id,values.has(id)?null:s);}return values;};
+    const observations=uniqueBy(s=>s.stopId),byStation=uniqueBy(s=>s.stopId&&(schedule.parents[s.stopId]||s.stopId));
     const trainTimestamp = number(u.timestamp) || timestamp;
     const stops = trip.stops.map(s => {
-      const update = observations.get(s[4]) || observations.get(`seq:${s[3]}`) || byStation.get(s[0]);
+      const update = bySequence.get(s[3]) || observations.get(s[4]) || byStation.get(s[0]);
       const arrival = update?.arrival?.time != null ? number(update.arrival.time) : null;
       const departure = update?.departure?.time != null ? number(update.departure.time) : null;
       const skipped = Number(update?.scheduleRelationship) === 1;
@@ -153,16 +156,17 @@ export function normalizeTrips(feed, schedule, now) {
     const headsign = schedule.stationNames[terminal] || trip.headsign;
     const directionId=number(raw.directionId??trip.directionId);
     const train = {id:key, tripId, line, routeId:trip.route, directionId, serviceDate, headsign, terminal, timestamp:trainTimestamp, stops};
+    if(schedule.regional){const route=schedule.routes[trip.route];Object.assign(train,{agency:route.agency_id,routeName:route.route_short_name||route.route_long_name,maxAge:180});}
     trains.push(train);
-    if (sourceState(trainTimestamp, now) !== 'live') continue;
+    if (sourceState(trainTimestamp, now,train.maxAge??TRIP_MAX_AGE) !== 'live') continue;
     stops.forEach((s, i) => {
       const time = s.departure ?? s.arrival;
       if (s.skipped || i === stops.length - 1 || time == null || time < now / 1000 - 15 || time > now / 1000 + 5400) return;
-      (departures[s.station] ||= []).push({id:key, line, routeId:trip.route, directionId, serviceDate, terminal, headsign, platform:s.platform, platformSource:s.platformSource, time, scheduledTime:s.scheduledDeparture, timestamp:trainTimestamp, delay:s.departureDelay??s.arrivalDelay});
+      (departures[s.station] ||= []).push({id:key, line, routeId:trip.route, directionId, serviceDate, terminal, headsign, platform:s.platform, platformSource:s.platformSource, time, scheduledTime:s.scheduledDeparture, timestamp:trainTimestamp, delay:s.departureDelay??s.arrivalDelay,...(schedule.regional?{agency:train.agency,maxAge:180}:{})});
     });
   }
   for (const items of Object.values(departures)) items.sort((a,b) => a.time-b.time);
-  return {timestamp, trains, departures, cancelled, counts:{tripUpdates:(feed.entity || []).filter(e=>e.tripUpdate).length, matchedTrips:trains.length, unmatchedTrips:unmatched, inactiveTrips:inactive, positionedTrips:trains.filter(t=>inferSegment(t,now)).length}};
+  return {timestamp, trains, departures, cancelled, counts:{tripUpdates:(feed.entity || []).filter(e=>e.tripUpdate).length, matchedTrips:trains.length, unmatchedTrips:unmatched, inactiveTrips:inactive, positionedTrips:trains.filter(t=>inferSegment(t,now)).length,...(schedule.regional?{ignoredTrips:ignored}:{})}};
 }
 
 function translated(value) {
@@ -177,15 +181,17 @@ export function normalizeAlerts(feed, schedule, now) {
     if (!a || e.isDeleted) continue;
     const periods = a.activePeriod || [];
     if (periods.length && !periods.some(p => (!p.start || Number(p.start) <= now / 1000) && (!p.end || Number(p.end) >= now / 1000))) continue;
-    const stations = [], lines = [];
+    const stations = [], lines = [], agencies=[];
     for (const scope of a.informedEntity || []) {
       const station = schedule.parents[scope.stopId] || scope.stopId;
       if (station && schedule.stationNames[station]) stations.push(station);
       const routeId = scope.routeId || schedule.trips[scope.trip?.tripId]?.route;
       const line = lineForRoute(routeId,schedule);
       if (line) lines.push(line);
+      if(schedule.regional){const agency=schedule.routes[routeId]?.agency_id||scope.agencyId;if(agency&&schedule.network.agencies.some(a=>a.id===agency)&&(!routeId||line))agencies.push(agency);}
     }
-    alerts.push({id:e.id, header:translated(a.headerText), description:translated(a.descriptionText), stations:[...new Set(stations)], lines:[...new Set(lines)], effect:Number(a.effect) || null});
+    if(schedule.regional&&!agencies.length&&!lines.length&&!stations.length)continue;
+    alerts.push({id:e.id, header:translated(a.headerText), description:translated(a.descriptionText), stations:[...new Set(stations)], lines:[...new Set(lines)], effect:Number(a.effect) || null,...(schedule.regional?{agencies:[...new Set(agencies)]}:{})});
   }
   return {timestamp:number(feed.header?.timestamp), items:alerts};
 }
