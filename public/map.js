@@ -1,7 +1,8 @@
 import {AGENCIES, AGENCY_BY_ID, project, REGIONAL_MAX_AGE} from './networks.js';
 import {sourceState, trainDelay, serviceGaps} from './model.js';
-import {createMapGeometry, locateTrain, remainingStops, pointAt} from './regional-geometry.js';
+import {createMapGeometry, createCorridors, locateTrain, remainingStops, pointAt} from './regional-geometry.js';
 import {waterPath} from './water.js';
+import {busHubName,busHubPriority,stationRadius,clusterVehicles} from './map-overview.js';
 
 const $ = selector => document.querySelector(selector), NS = 'http://www.w3.org/2000/svg';
 const attributes = new WeakMap();
@@ -19,15 +20,16 @@ function make(tag, values = {}, parent) {
   parent?.append(el); return el;
 }
 const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-const map = $('#map'), routesLayer = $('#routes'), stationsLayer = $('#stations'), labelsLayer = $('#station-labels'), trainsLayer = $('#trains'), cuesLayer = $('#map-cues');
+const map = $('#map'), routesLayer = $('#routes'), stationsLayer = $('#stations'), labelsLayer = $('#station-labels'), trainsLayer = $('#trains'), clustersLayer = $('#bus-clusters'), cuesLayer = $('#map-cues');
 const canvas = document.createElement('canvas'), measure = canvas.getContext('2d');
 const widths = new Map(), colors = new Map(), clockFormatter = new Intl.DateTimeFormat('en-GB', {timeZone:'America/Los_Angeles', hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
 let network, geometry, snapshot, focus = 'all', line = 'all', buses = false, labels = true;
 let paused = matchMedia('(prefers-reduced-motion: reduce)').matches, selected = null, followed = null, clockOffset = 0, trigger = null;
 let view = {x:-450, y:0, w:1700, h:2500}, viewport, scale = 1, userMoved = false, cameraOverview = false;
-let activeLines = new Set(), activeStations = [], activeTrains = [], geometryKey = '', geometryRevision = 0;
-let stationNodes = new Map(), routeNodes = new Map(), trains = new Map(), cueNodes = new Map(), lanes = new Map();
+let activeLines = new Set(), contextLines = new Set(), activeStations = [], activeTrains = [], geometryKey = '', geometryRevision = 0;
+let stationNodes = new Map(), routeNodes = new Map(), trains = new Map(), cueNodes = new Map(), clusterNodes = new Map(), lanes = new Map();
 let labelOccupied = [], upcomingRows = new Map(), viewportRevision = '', frameHandle = 0;
+const corridorCache=new Map(),clusterRows=new Map();let clusterSelection=[];
 let cameraDirty = false, geometryDirty = true, stationsDirty = true, vehiclesDirty = true, cuesDirty = true, tickDue = true;
 let geometryTimer, pollTimer, fetching = false, etag = '', lastFrame = 0, statusRevision = '';
 const stationDetails = new Map(), trainDetails = new Map(), detailRequests = new Map();
@@ -36,6 +38,8 @@ const fresh = stamp => sourceState(stamp, now(), REGIONAL_MAX_AGE) === 'live';
 const enabledAgency = id => focus === 'all' ? id !== 'AC' || buses : id === focus;
 const enabledLine = id => activeLines.has(id);
 const enabledStation = station => station.public !== false && station.lines.some(enabledLine);
+const busOverview = () => line === 'all';
+const busStop = stop => focus === 'AC' || stop.agencies.every(id=>id==='AC');
 const age = stamp => { if (!stamp) return 'unavailable'; const seconds = Math.max(0, Math.floor(now()/1000-stamp)); return seconds < 60 ? seconds+'s ago' : Math.floor(seconds/60)+'m '+seconds%60+'s ago'; };
 const eta = time => time == null ? '—' : Math.max(0, Math.ceil((time-now()/1000)/60)) === 0 ? 'Now' : Math.ceil((time-now()/1000)/60)+'m';
 function color(hex) {
@@ -70,8 +74,11 @@ function inView(point, margin = 30) {
 function requestFrame() { if (!frameHandle) frameHandle = requestAnimationFrame(animate); }
 function invalidate() { requestFrame(); }
 function scope() {
-  activeLines = new Set(Object.values(network.lines).filter(meta => enabledAgency(meta.agency) && (line === 'all' || line === meta.id)).map(meta => meta.id));
-  activeStations = Object.values(network.stations).filter(enabledStation).sort((a,b) => (Number(b.major)*10+b.agencies.length)-(Number(a.major)*10+a.agencies.length) || a.id.localeCompare(b.id));
+  const allowed=Object.values(network.lines).filter(meta=>enabledAgency(meta.agency));
+  activeLines = new Set(allowed.filter(meta => line === 'all' || line === meta.id).map(meta => meta.id));
+  contextLines = new Set(line==='all'?[]:allowed.filter(meta=>!activeLines.has(meta.id)).map(meta=>meta.id));
+  const priority=stop=>(focus==='AC'&&busOverview()?busHubPriority(stop):0)+Number(stop.major)*10+stop.agencies.length;
+  activeStations = Object.values(network.stations).filter(enabledStation).sort((a,b) => priority(b)-priority(a) || a.id.localeCompare(b.id));
   activeTrains = [...trains.values()].filter(train => enabledLine(train.raw.line));
   for (const train of activeTrains) train.delay=trainDelay(train.raw,now());
   for (const train of trains.values()) if (train.el && !enabledLine(train.raw.line)) { train.el.remove(); train.el=train.body=train.shape=null; }
@@ -98,26 +105,51 @@ function fit({overview = cameraOverview} = {}) {
   view = {x:center.x-rect.width/k/2, y:center.y-(top+(rect.height-top-bottom)/2)/k, w:rect.width/k, h:rect.height/k};
   clearTimeout(geometryTimer); geometryTimer = null; drawView(true);
 }
+function pathData(points){return points.map((p,i)=>(i?'L':'M')+Math.round(p.x*1000)/1000+','+Math.round(p.y*1000)/1000).join(' ');}
+function corridors(lines){
+  if(!lines.size)return new Map();
+  const key=[...lines].join(',');
+  if(!corridorCache.has(key)){
+    const groups=new Map();
+    for(const shape of createCorridors(network,lines)){
+      const kind=shape.mode==='bus'?'bus':shape.mode==='ferry'?'ferry':'rail';
+      if(!groups.has(kind))groups.set(kind,new Set());groups.get(kind).add(pathData(shape.points));
+    }
+    if(corridorCache.size>=8)corridorCache.delete(corridorCache.keys().next().value);
+    corridorCache.set(key,new Map([...groups].map(([kind,paths])=>[kind,[...paths].join(' ')])));
+  }
+  return corridorCache.get(key);
+}
 function rebuildGeometry() {
-  const key = [...activeLines].join(',')+'|'+scale.toFixed(7);
+  const key = [...activeLines].join(',')+'|'+[...contextLines].join(',')+'|'+scale.toFixed(7);
   if (!geometryDirty && geometryKey === key) return;
   if (geometryKey !== key) {
     geometry = createMapGeometry(network, scale, {lines:activeLines});
     geometryKey = key; geometryRevision++;
     const paths = new Map(); lanes = new Map();
+    for(const [kind,d]of corridors(contextLines))paths.set('context:'+kind,{d,kind,context:true});
+    if(busOverview()){
+      const busLines=new Set([...activeLines].filter(id=>network.lines[id].mode==='bus'));
+      const d=busLines.size?corridors(busLines).get('bus'):null;
+      if(d)paths.set('bus-overview',{d,kind:'bus',overview:true});
+    }
     for (const shape of geometry.shapes) {
-      if (!paths.has(shape.line)) paths.set(shape.line, []);
-      paths.get(shape.line).push(shape.points.map((p,i) => (i?'L':'M')+(Math.round(p.x*1000)/1000)+','+(Math.round(p.y*1000)/1000)).join(' '));
+      if(shape.mode==='bus'&&busOverview())continue;
+      if (!paths.has(shape.line)) paths.set(shape.line,{parts:[],kind:shape.mode});
+      paths.get(shape.line).parts.push(pathData(shape.points));
     }
     for (const edge of network.edges) {
-      const count = edge.lines.filter(enabledLine).length;
+      const count = edge.lines.filter(id=>enabledLine(id)&&network.lines[id].mode!=='bus').length;
       if (count) for (const id of [edge.a,edge.b]) lanes.set(id, Math.max(lanes.get(id)||1, count));
     }
     for (const [id,el] of routeNodes) if (!paths.has(id)) { el.remove(); routeNodes.delete(id); }
-    for (const [id,segments] of paths) {
+    for (const [id,value] of paths) {
       const meta = network.lines[id]; let el = routeNodes.get(id);
-      if (!el) { el = make('path', {class:'route '+meta.mode, 'data-line':id}, routesLayer); routeNodes.set(id,el); }
-      attr(el,'d',segments.join(' ')); attr(el,'stroke',color(meta.color));
+      if (!el) { el = make('path', {}, routesLayer); routeNodes.set(id,el); }
+      attr(el,'class','route '+value.kind+(value.context?' context':'')+(value.overview?' overview':''));
+      if(meta)attr(el,'data-line',id);
+      attr(el,'d',value.d??value.parts.join(' ')); attr(el,'stroke',meta?color(meta.color):'var(--corridor)');
+      routesLayer.append(el);
     }
   }
   geometryDirty = false; stationsDirty = vehiclesDirty = cuesDirty = true;
@@ -135,8 +167,8 @@ function drawView(commitGeometry = true) {
   if (cuesDirty) renderCues();
 }
 function overlaps(box, occupied) { return occupied.some(other => box.x < other.x+other.w && box.x+box.w > other.x && box.y < other.y+other.h && box.y+box.h > other.y); }
-function labelWidth(stop) {
-  const name = stop.name.replace(/ Station$/i,''), key = (stop.major?'700:':'500:')+name;
+function labelWidth(stop,name=stop.name.replace(/ Station$/i,'')) {
+  const key = (stop.major?'700:':'500:')+name;
   if (!widths.has(key)) { measure.font=(stop.major?'700':'500')+' 12px DM Sans, sans-serif'; widths.set(key,measure.measureText(name).width+9); }
   return widths.get(key);
 }
@@ -150,36 +182,43 @@ function layoutStations() {
   const rect = bounds(), visible = new Set();
   const occupied = [{x:0,y:0,w:Math.min(360,rect.width*.65),h:155},{x:rect.width-300,y:0,w:300,h:100},{x:0,y:rect.height-155,w:rect.width,h:155}];
   const detail = focus !== 'all' && focus !== 'AC' || scale > (focus === 'all' ? 3 : 1.3);
-  const busCells=new Set(),busBudget=innerWidth<=650?180:600;let busStops=0;
+  const mobile=innerWidth<=650,quiet=busOverview(),nearby=scale>=18;
+  const busCells=new Set(),hubNames=new Set(),busBudget=quiet&&!nearby?(mobile?6:14):(mobile?40:120),labelBudget=quiet?(mobile?8:18):(mobile?14:30);let busStops=0,busLabels=0;
   const chosen = selected && network.stations[selected];
   const ordered = chosen && enabledStation(chosen) ? [chosen,...activeStations.filter(stop=>stop.id!==selected)] : activeStations;
   for (const stop of ordered) {
-    if (!stop.major && !detail && stop.id !== selected) continue;
+    const bus=busStop(stop),hub=bus?busHubName(stop):null,chosenStop=stop.id===selected;
+    if(bus&&quiet&&!nearby&&!hub&&!chosenStop)continue;
+    if (!bus&&!stop.major && !detail && !chosenStop) continue;
     const p = screen(stop);
     if (p.x < -20 || p.x > rect.width+20 || p.y < 90 || p.y > rect.height-100) continue;
-    if (stop.id!==selected && stop.agencies.every(id=>id==='AC')) {
-      const cell=Math.floor(p.x/18)+':'+Math.floor(p.y/18);
-      if (busStops>=busBudget || busCells.has(cell)) continue;
-      busCells.add(cell);busStops++;
+    if(bus&&!chosenStop){
+      const spacing=quiet&&!nearby?70:20,cell=Math.floor(p.x/spacing)+':'+Math.floor(p.y/spacing);
+      if(busStops>=busBudget||busCells.has(cell)||quiet&&hub&&hubNames.has(hub))continue;
+      busCells.add(cell);
     }
-    visible.add(stop.id); let node = stationNodes.get(stop.id);
-    if (!node) { node=createStation(stop); stationNodes.set(stop.id,node); }
-    const radius = Math.max(stop.agencies.length>1?6.5:stop.major?5.5:3.5,((lanes.get(stop.id)||1)-1)*1.5+2.3)/scale;
-    attr(node.shape,'r',radius); attr(node.hit,'r',Math.max(11/scale,radius));
-    attr(node.el,'class','station'+(stop.agencies.length>1?' transfer':'')+(stop.id===selected?' selected':''));
+    const radius=stationRadius(stop,{bus,selected:chosenStop,lanes:lanes.get(stop.id)||1})/scale;
+    const name=bus&&quiet&&hub?hub:stop.name.replace(/ Station$/i,'');
     let placement;
-    if (labels) {
-      const width=labelWidth(stop), offset=Math.max(10,radius*scale+4);
+    if (labels&&(!bus||busLabels<labelBudget||chosenStop)) {
+      const width=labelWidth(stop,name), offset=Math.max(bus&&quiet?14:10,radius*scale+5);
       for (const [dx,dy] of [[offset,-7],[-width-offset,-7],[-width/2,-offset-14],[-width/2,offset]]) {
-        const box={x:p.x+dx,y:p.y+dy,w:width,h:17};
+        const box={x:p.x+dx-3,y:p.y+dy-3,w:width+6,h:22};
         if (box.x<9 || box.x+width>rect.width-8 || overlaps(box,occupied)) continue;
         placement={dx,dy,box}; break;
       }
-      if (!placement && stop.id===selected) placement={dx:10,dy:-7,box:{x:p.x+10,y:p.y-7,w:width,h:17}};
+      if (!placement && chosenStop) placement={dx:10,dy:-7,box:{x:p.x+7,y:p.y-10,w:width+6,h:22}};
     }
+    if(bus&&quiet&&!nearby&&labels&&!placement&&!chosenStop)continue;
+    if(bus){busStops++;if(hub)hubNames.add(hub);}
+    visible.add(stop.id); let node = stationNodes.get(stop.id);
+    if (!node) { node=createStation(stop); stationNodes.set(stop.id,node); }
+    attr(node.shape,'r',radius); attr(node.hit,'r',Math.max(11/scale,radius));
+    attr(node.el,'class','station'+(stop.agencies.length>1?' transfer':'')+(chosenStop?' selected':'')+(bus&&quiet?' bus-overview':''));
     if (placement) {
-      occupied.push(placement.box);
-      if (!node.label) { node.label=make('text',{class:'station-label'+(stop.major?' major':''),visibility:'visible'},labelsLayer); text(node.label,stop.name.replace(/ Station$/i,'')); }
+      occupied.push(placement.box);if(bus)busLabels++;
+      if (!node.label)node.label=make('text',{visibility:'visible'},labelsLayer);
+      attr(node.label,'class','station-label'+(stop.major?' major':''));text(node.label,name);
       attr(node.label,'transform',`translate(${stop.x+placement.dx/scale} ${stop.y+(placement.dy+12)/scale})`); attr(node.label,'font-size',12/scale);
     } else if (node.label) { node.label.remove(); node.label=null; }
   }
@@ -187,8 +226,8 @@ function layoutStations() {
   labelOccupied=occupied; stationsDirty=false; cuesDirty=true;
 }
 function buildMap() {
-  routesLayer.replaceChildren(); stationsLayer.replaceChildren(); labelsLayer.replaceChildren(); trainsLayer.replaceChildren(); cuesLayer.replaceChildren();
-  stationNodes.clear(); routeNodes.clear(); cueNodes.clear();
+  routesLayer.replaceChildren(); stationsLayer.replaceChildren(); labelsLayer.replaceChildren(); trainsLayer.replaceChildren(); clustersLayer.replaceChildren();cuesLayer.replaceChildren();
+  stationNodes.clear(); routeNodes.clear(); cueNodes.clear();clusterNodes.clear();corridorCache.clear();
   for (const train of trains.values()) train.el=train.body=train.shape=null;
   geometry=null; geometryKey=''; viewportRevision='';
   $('#water').replaceChildren();
@@ -205,7 +244,7 @@ function buildTabs() {
   }
 }
 function buildLineSelect() {
-  const select=$('#line-select'); select.replaceChildren(new Option(focus==='all'?(buses?'All networks':'All rail & ferries'):'All '+AGENCY_BY_ID[focus].short+' routes','all'));
+  const select=$('#line-select'); select.replaceChildren(new Option(focus==='AC'?'Overview · choose a route':focus==='all'?(buses?'All networks':'All rail & ferries'):'All '+AGENCY_BY_ID[focus].short+' routes','all'));
   if (focus!=='all') for (const meta of Object.values(network.lines).filter(meta=>meta.agency===focus).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}))) select.add(new Option(meta.name,meta.id));
   select.value=line;
 }
@@ -213,12 +252,24 @@ function updateControls() {
   for (const button of document.querySelectorAll('[data-network]')) attr(button,'aria-pressed',button.dataset.network===focus);
   attr($('#buses'),'aria-pressed',buses); text($('#buses'),buses?'− Buses':'+ Buses');
   text($('#view-name'),focus==='all'?'Bay Area, in motion.':AGENCY_BY_ID[focus].name+', in motion.');
-  text($('#network-caption'),focus==='all'?(buses?'Seven networks · rail, ferries & buses':'Six rail & ferry networks · buses optional'):network.counts[focus].stations+' stops · '+(focus==='AC'?'bus network':AGENCY_BY_ID[focus].name));
+  const focused=line!=='all',quiet=busOverview()&&(focus==='AC'||focus==='all'&&buses);
+  document.body.classList.toggle('route-focused',focused);$('#route-clear').hidden=!focused;
+  text($('#network-caption'),focused?'Route '+network.lines[line].name+' · '+activeStations.length+' stops':focus==='AC'?'Bus overview · choose a route for detail':focus==='all'?(buses?'Rail, ferries & bus corridors':'Six rail & ferry networks · buses optional'):network.counts[focus].stations+' stops · '+AGENCY_BY_ID[focus].name);
+  text($('#explore-hint'),quiet?'Choose a route · numbers group nearby buses':focused?'Tap a stop or vehicle for details':'Drag to explore · fit to see the whole network');
+  text($('#cue-note'),quiet?'Amber/red marks delays · route views show gap clocks':'Outlines show delays · clocks show gaps');
 }
 function chooseNetwork(id) {
-  focus=id; line='all'; if (id==='AC') buses=true; followed=null;
+  focus=id; line='all'; if (id==='AC') buses=true; followed=null;selected=null;
   closePanel(false); buildLineSelect(); scope(); updateControls(); fit({overview:false});
   $('#network-tabs [data-network="'+id+'"]').scrollIntoView({block:'nearest',inline:'nearest'}); renderStatus();
+}
+function chooseLine(id,{refit=true}={}){
+  if(id!=='all'&&!network.lines[id])return;
+  line=id;selected=null;followed=null;
+  if(id!=='all'){focus=network.lines[id].agency;if(focus==='AC')buses=true;}
+  closePanel(false);buildLineSelect();scope();updateControls();
+  if(refit)fit({overview:false});else drawView(true);
+  renderStatus();
 }
 function populateStations(query=$('#station-search').value) {
   if (!network) return;
@@ -231,8 +282,8 @@ function populateStations(query=$('#station-search').value) {
 }
 function openPanel(mode) {
   trigger??=document.activeElement; $('#inspector').hidden=false; document.body.classList.add('inspector-open');
-  $('#station-panel').hidden=mode!=='station'; $('#network-panel').hidden=mode!=='network';
-  text($('#panel-title'),mode==='station'?'At the platform':'Service & data');
+  $('#station-panel').hidden=mode!=='station'; $('#network-panel').hidden=mode!=='network';$('#cluster-panel').hidden=mode!=='cluster';
+  text($('#panel-title'),mode==='station'?'At the platform':mode==='cluster'?'Nearby buses':'Service & data');
   for (const id of ['service','connection']) attr($('#'+id),'aria-expanded',mode==='network'); attr($('#station-finder'),'aria-expanded',mode==='station');
   if (mode==='network') { statusRevision=''; renderStatus(); }
 }
@@ -252,17 +303,66 @@ function chooseStation(id,keepTrain=false) {
 }
 function chooseTrain(id) {
   const train=trains.get(id); if (!train) return;
+  if(network.lines[train.raw.line].mode==='bus'&&busOverview()){
+    focus=train.raw.agency;line=train.raw.line;buses=true;buildLineSelect();scope();updateControls();drawView(true);
+  }
   const stop=train.position?.to||train.raw.mapMotion?.anchor?.to||train.raw.mapMotion?.windows?.[0]?.to;
   if (stop) selected=stop; followed=id; stationsDirty=true;
   populateStations(); openPanel('station'); layoutStations(); renderStation(); renderCues(); ensureDetails();
 }
-function createTrain(train) {
+function createTrain(train,compact=false) {
   const raw=train.raw, meta=network.lines[raw.line];
   const el=make('g',{class:'train',tabindex:0,role:'button','aria-label':AGENCY_BY_ID[raw.agency].short+' '+raw.headsign,'data-agency':raw.agency,'data-train':raw.id,visibility:'visible'},trainsLayer);
-  const body=make('g',{},el); make('rect',{class:'vehicle-outline',x:-11,y:-6,width:22,height:12,rx:3},body);
+  const body=make('g',{},el);
+  if(compact){
+    make('circle',{r:11,fill:'transparent'},body);
+    const shape=make('circle',{class:'vehicle-dot',r:2.8},body);
+    Object.assign(train,{el,body,shape,renderKind:'dot'});return;
+  }
+  make('rect',{class:'vehicle-outline',x:-11,y:-6,width:22,height:12,rx:3},body);
   const path=meta.mode==='ferry'?'M-10 -4 L7 -4 L11 0 L7 4 L-10 4Z':meta.mode==='bus'?'M-8 -4 H8 V4 H-8Z':'M-10 -4 H10 V4 H-10Z';
   const shape=make('path',{class:'vehicle-body',d:path,fill:color(meta.color)},body); make('path',{class:'vehicle-window',d:'M3 -2 H6 V2 H3Z'},body);
-  Object.assign(train,{el,body,shape});
+  Object.assign(train,{el,body,shape,renderKind:'vehicle'});
+}
+function paintTrain(train,compact=false){
+  if(train.el&&train.renderKind!==(compact?'dot':'vehicle')){train.el.remove();train.el=null;}
+  if(!train.el)createTrain(train,compact);
+  const position=train.position;
+  attr(train.el,'class','train'+(compact?' bus-dot':'')+(!position?' stale':'')+(train.delay?.seconds>=60&&position?' late':'')+(train.delay?.seconds>=300&&position?' severe':''));
+  attr(train.el,'transform',`translate(${train.last.x.toFixed(3)} ${train.last.y.toFixed(3)})`);
+  attr(train.body,'transform',`scale(${(compact?1:focus==='all'?.6:1)/scale}) rotate(${compact?0:train.last.angle.toFixed(3)})`);
+}
+function paintCluster(group,used){
+  const members=group.members.map(point=>point.train),id=JSON.stringify(members.map(train=>train.raw.id));used.add(id);
+  let node=clusterNodes.get(id);
+  if(!node){
+    const el=make('g',{tabindex:0,role:'button','data-bus-cluster':id},clustersLayer),body=make('g',{},el);
+    make('circle',{r:14,class:'cluster-hit'},body);const circle=make('circle',{r:9,class:'cluster-body'},body),label=make('text',{},body);
+    node={el,body,circle,label};clusterNodes.set(id,node);
+  }
+  node.members=members.map(train=>train.raw.id);
+  const live=members.some(train=>train.position),delay=Math.max(0,...members.map(train=>train.position?train.delay?.seconds||0:0));
+  attr(node.el,'class','bus-cluster'+(!live?' stale':'')+(delay>=60?' late':'')+(delay>=300?' severe':''));
+  attr(node.el,'aria-label',members.length+' buses nearby'+(!live?', last known positions':'')+'. Select to view individual buses.');
+  attr(node.el,'data-count',members.length);attr(node.body,'transform',`translate(${group.x/scale} ${group.y/scale}) scale(${1/scale})`);
+  attr(node.circle,'r',members.length>99?12:9);text(node.label,members.length);
+}
+function chooseBusCluster(id){
+  const node=clusterNodes.get(id);if(!node)return;
+  clusterSelection=[...node.members];openPanel('cluster');renderBusCluster();
+}
+function renderBusCluster(){
+  const used=new Set();
+  for(const id of clusterSelection){
+    const train=trains.get(id);if(!train||!network.lines[train.raw.line])continue;used.add(id);
+    let row=clusterRows.get(id);
+    if(!row){const button=document.createElement('button');button.className='cluster-vehicle';button.dataset.train=id;
+      const name=document.createElement('strong'),destination=document.createElement('span'),status=document.createElement('small');button.append(name,destination,status);button.onclick=()=>chooseTrain(id);$('#cluster-list').append(button);row={button,name,destination,status};clusterRows.set(id,row);}
+    text(row.name,'Route '+network.lines[train.raw.line].name);text(row.destination,train.raw.headsign);
+    text(row.status,!train.position?'Last known position':train.delay?.seconds>=60?'Reported delay +'+Math.round(train.delay.seconds/60)+'m':'Select for upcoming stops');
+  }
+  for(const [id,row]of clusterRows)if(!used.has(id)){row.button.remove();clusterRows.delete(id);}
+  text($('#cluster-summary'),used.size?used.size+' buses in this group. Choose one to see its route and stops.':'These buses are no longer reported.');
 }
 function syncTrains() {
   const ids=new Set();
@@ -289,7 +389,7 @@ function positionFor(train,stamp) {
 }
 function renderVehicles(time) {
   if (!network||!geometry) return;
-  const stamp=now(); let count=0;
+  const stamp=now(),busPoints=[],usedClusters=new Set(); let count=0;
   for (const train of activeTrains) {
     const position=positionFor(train,stamp);
     train.position=position;
@@ -299,12 +399,22 @@ function renderVehicles(time) {
     }
     train.lastGeometry=geometryRevision;
     if (!train.last||!inView(train.last)) { if (train.el) { train.el.remove(); train.el=train.body=train.shape=null; } continue; }
-    if (!train.el) createTrain(train);
-    attr(train.el,'class','train'+(!position?' stale':'')+(train.delay?.seconds>=60&&position?' late':'')+(train.delay?.seconds>=300&&position?' severe':''));
-    attr(train.el,'transform',`translate(${train.last.x.toFixed(3)} ${train.last.y.toFixed(3)})`);
-    attr(train.body,'transform',`scale(${(focus==='all'?.6:1)/scale}) rotate(${train.last.angle.toFixed(3)})`);
+    if(network.lines[train.raw.line].mode==='bus'&&busOverview()){
+      const p=screen(train.last),rect=bounds();
+      if(p.y<160||p.y>rect.height-155){train.el?.remove();train.el=train.body=train.shape=null;continue;}
+      busPoints.push({id:train.raw.id,x:train.last.x*scale,y:train.last.y*scale,train});
+    }else paintTrain(train);
     if (position) count++;
   }
+  for(const group of clusterVehicles(busPoints,24)){
+    if(group.members.length===1)paintTrain(group.members[0].train,true);
+    else{
+      for(const point of group.members){point.train.el?.remove();point.train.el=point.train.body=point.train.shape=null;}
+      paintCluster(group,usedClusters);
+    }
+  }
+  for(const [id,node]of clusterNodes)if(!usedClusters.has(id)){node.el.remove();clusterNodes.delete(id);}
+  if(!$('#inspector').hidden&&!$('#cluster-panel').hidden)renderBusCluster();
   text($('#train-count'),count); vehiclesDirty=false;
 }
 function placeCue(point,value,preferred,occupied) {
@@ -333,11 +443,13 @@ function renderCues() {
   const occupied=labelOccupied.slice(), used=new Set(), offsets=[[28,-23],[-28,-23],[34,23],[-34,23],[0,-37],[0,35]];
   let displayed=0;
   for (const train of activeTrains.filter(train=>train.el&&train.position&&train.delay?.seconds>=60).sort((a,b)=>b.delay.seconds-a.delay.seconds)) {
+    if(network.lines[train.raw.line].mode==='bus'&&busOverview())continue;
     if (focus==='all'&&displayed>=8) break;
     const value='+'+Math.round(train.delay.seconds/60)+'m',p=placeCue(train.last,value,offsets,occupied); if (!p) continue;
     const key='train:'+train.raw.id; used.add(key); cue(key,p,value,train.delay.seconds>=300,{train:train.raw.id,leader:train.last}); displayed++;
   }
   for (const gap of snapshot?.trips.gaps||[]) {
+    if(network.lines[gap.line]?.mode==='bus'&&busOverview()&&gap.station!==selected)continue;
     const stop=network.stations[gap.station];
     if (!stop||!stationNodes.has(gap.station)||!enabledLine(gap.line)||!fresh(gap.timestamp)||gap.nextTime<now()/1000-15) continue;
     const value='◷ '+Math.round(gap.seconds/60)+'m',p=placeCue(stop,value,[[0,28],[32,-23],[-32,-23]],occupied); if (!p) continue;
@@ -487,13 +599,14 @@ function beginGesture() {
   gesture=points.length>1?{kind:'pinch',distance:Math.hypot(points[1].x-points[0].x,points[1].y-points[0].y),anchor:localPoint((points[0].x+points[1].x)/2,(points[0].y+points[1].y)/2),view:{...view}}:points.length?{kind:'pan',point:points[0],view:{...view},moved:false}:null;
 }
 function activate(target) {
-  const station=target.closest('[data-station],[data-cue-station]'),train=target.closest('[data-train],[data-cue-train]');
-  if (station) chooseStation(station.dataset.station||station.dataset.cueStation);
+  const cluster=target.closest('[data-bus-cluster]'),station=target.closest('[data-station],[data-cue-station]'),train=target.closest('[data-train],[data-cue-train]');
+  if(cluster)chooseBusCluster(cluster.dataset.busCluster);
+  else if (station) chooseStation(station.dataset.station||station.dataset.cueStation);
   else if (train) chooseTrain(train.dataset.train||train.dataset.cueTrain);
 }
 map.addEventListener('click',event=>activate(event.target));
-map.addEventListener('keydown',event=>{if ((event.key==='Enter'||event.key===' ')&&event.target.closest('.station,.train,.cue-badge')) { event.preventDefault(); activate(event.target); }});
-map.addEventListener('pointerdown',event=>{if (event.button>0||event.target.closest('.station,.train,.cue-badge')) return; pointers.set(event.pointerId,{x:event.clientX,y:event.clientY}); map.setPointerCapture(event.pointerId); beginGesture();});
+map.addEventListener('keydown',event=>{if ((event.key==='Enter'||event.key===' ')&&event.target.closest('.station,.train,.bus-cluster,.cue-badge')) { event.preventDefault(); activate(event.target); }});
+map.addEventListener('pointerdown',event=>{if (event.button>0||event.target.closest('.station,.train,.bus-cluster,.cue-badge')) return; pointers.set(event.pointerId,{x:event.clientX,y:event.clientY}); map.setPointerCapture(event.pointerId); beginGesture();});
 map.addEventListener('pointermove',event=>{
   if (!pointers.has(event.pointerId)||!gesture) return;
   userMoved=true;
@@ -509,8 +622,9 @@ map.addEventListener('pointerup',event=>{const tap=gesture?.kind==='pan'&&!gestu
 map.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);beginGesture();});
 map.addEventListener('wheel',event=>{event.preventDefault();zoom(Math.exp(Math.max(-100,Math.min(100,event.deltaY))*.002),{x:event.clientX,y:event.clientY});},{passive:false});
 $('#zoom-in').onclick=()=>zoom(.75); $('#zoom-out').onclick=()=>zoom(1/.75); $('#reset').onclick=()=>network&&fit({overview:true});
-$('#buses').onclick=()=>{buses=!buses;focus='all';line='all';buildLineSelect();scope();updateControls();drawView(true);};
-$('#line-select').onchange=event=>{line=event.target.value;scope();updateControls();fit({overview:false});};
+$('#buses').onclick=()=>{buses=!buses;focus='all';line='all';selected=null;followed=null;closePanel(false);buildLineSelect();scope();updateControls();drawView(true);};
+$('#line-select').onchange=event=>chooseLine(event.target.value);
+$('#route-clear').onclick=()=>chooseLine('all',{refit:false});
 $('#labels').onclick=()=>{labels=!labels;attr($('#labels'),'aria-pressed',labels);attr($('#labels'),'aria-label',labels?'Hide station names':'Show station names');stationsDirty=true;layoutStations();renderCues();};
 function togglePause() { paused=!paused;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');vehiclesDirty=true;requestFrame(); }
 $('#pause').onclick=togglePause;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');$('#close-panel').onclick=()=>closePanel();
@@ -520,7 +634,7 @@ for (const id of ['service','connection','view-service']) $('#'+id).onclick=()=>
 $('#refresh').onclick=()=>{stationDetails.clear();trainDetails.clear();poll();ensureDetails();};
 document.addEventListener('keydown',event=>{if(event.key==='Escape'){closePanel();return;}if(event.target.closest('button,select,input,[role=button]'))return;if(event.code==='Space'){event.preventDefault();togglePause();}if(event.key.toLowerCase()==='l')$('#labels').click();});
 new MutationObserver(()=>{
-  colors.clear();for(const[id,el]of routeNodes)attr(el,'stroke',color(network.lines[id].color));for(const train of activeTrains)if(train.shape)attr(train.shape,'fill',color(network.lines[train.raw.line].color));
+  colors.clear();for(const[id,el]of routeNodes)if(network.lines[id])attr(el,'stroke',color(network.lines[id].color));for(const train of activeTrains)if(train.shape&&train.renderKind!=='dot')attr(train.shape,'fill',color(network.lines[train.raw.line].color));
   statusRevision='';if(!$('#inspector').hidden&&!$('#station-panel').hidden)renderStation();renderStatus();
 }).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 new ResizeObserver(refreshViewport).observe(map);

@@ -4,6 +4,8 @@ A live Bay Area transit map inspired by Mini Metro. Includes BART, Caltrain, Mun
 
 The map opens closer around SF/Oakland; network tabs open closer views of their routes and stops. **Fit** shows the full selected network. The regional view shows rail and ferries; **+ Buses** adds AC Transit, and its network tab opens downtown Oakland. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks and a saved night mode are included.
 
+The bus overview bundles shared routes into muted corridors and shows a limited set of named transfer hubs. Bus markers are small dots; nearby buses form numbered groups. Select a group to choose an individual bus, or choose a route above the map. The selected route shows colored tracks, stop names, vehicle icons, delays and gap clocks over a faint network context. **← Overview** returns to the overview without moving the camera. Ordinary bus stops appear at neighborhood zoom; search can always reveal a specific stop. Stop circles have a fixed size limit.
+
 ## Run locally
 
 Use Node.js 22.13 or newer.
@@ -27,7 +29,7 @@ Browser modules are served directly. The build validates the required assets. Sp
 
 ## Rendering and response performance
 
-The map creates SVG elements for the active network and visible stops and vehicles. Track segments share one SVG path per route. Stop names use cached measurements and placement; live clock ticks do not rerun the stop layout. Pan and zoom events are combined into animation frames, with lane geometry rebuilt after the zoom gesture settles. Reported locations are resolved once per update, and estimated motion is capped at 30 updates per second. Dense bus-stop markers thin out at overview scales and appear with zoom or search.
+The map creates SVG elements for the active network and visible stops and vehicles. Rail segments share one SVG path per route; bus overviews use one centered corridor layer, and selected routes retain a faint network context. Stop names use cached measurements and placement; live clock ticks do not rerun the stop layout. Pan and zoom events are combined into animation frames, with lane geometry rebuilt after the zoom gesture settles. Reported locations are resolved once per update, and estimated motion is capped at 30 updates per second. Nearby bus markers group using a spatial grid while preserving every member for selection. Dense bus-stop markers thin out at overview scales and appear with zoom or search.
 
 `/api/live` sends compact motion windows, delay summaries and gap cues. Unchanged snapshots return HTTP 304; `X-Server-Time` keeps the browser clock aligned even when the body is unchanged. Full stop lists and station departures load only when their details are opened. These responses reuse the same upstream cache, so opening details does not increase 511 polling frequency. See [PERFORMANCE.md](PERFORMANCE.md) for the local comparison and validation method.
 

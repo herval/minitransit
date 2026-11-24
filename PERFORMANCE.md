@@ -40,3 +40,19 @@ node scripts/benchmark-map-data.mjs /path/to/full-snapshot.json
 ```
 
 Local browser checks covered all seven network views, isolated active-network SVG elements, lazy train/platform/departure details, keyboard focus in upcoming stops, optional buses, label/pause/night controls, unchanged-data responses, stale location/delay/gap clearing, and camera timings. No additional 511 requests were used for these recorded-data checks.
+
+## Bus overview and route focus
+
+The same 892-vehicle recording was used to compare the downtown Oakland starting view before and after the simplified bus overview. These are presentation counts, not frame-rate measurements.
+
+| AC Transit view | Before | Simplified overview |
+| --- | ---: | ---: |
+| Desktop visible stop markers | 430 | 7 |
+| Desktop SVG elements | 2,426 | 250 |
+| Phone-layout visible stop markers | 181 | 5 |
+| Phone-layout SVG elements | 1,167 | 125 |
+| Colored bus route paths in overview | 123 | 0 (one muted corridor layer) |
+
+Nearby buses form numbered groups, with every member available in a keyboard-accessible list. Selecting a bus focuses its route and loads its existing detail endpoint; choosing a route restores colored tracks, stop names, vehicle icons, delays and gap clocks against a faint network context. Returning to the overview preserves the camera. Full stop data remains searchable, and ordinary stops appear at closer zoom levels.
+
+Desktop and phone-layout checks covered group membership counts, individual selection, keyboard focus during updates, lazy detail requests, route context, camera preservation, zoom disclosure, all other networks, optional buses, night mode and source expiry. Four additional automated cases cover transport-hub naming, bounded stop sizes, grouping without lost/duplicated vehicles or long chains, and centered bus geometry.

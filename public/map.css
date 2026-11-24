@@ -7,3 +7,12 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 
 .source-credit{font-size:9px;opacity:.8}.source-credit a{pointer-events:auto}
+:root{--corridor:#aeb8ba;--bus-dot:#4c6e7d}
+:root[data-theme=night]{--corridor:#667b87;--bus-dot:#a0c6d4}
+.route{pointer-events:none}.route.overview{stroke-width:1.25;opacity:.48}.route.context{stroke-width:1;opacity:.22}.route.bus:not(.overview):not(.context){stroke-width:3;opacity:1}
+.station.bus-overview .node{stroke:var(--muted);stroke-width:1.4}
+.vehicle-dot{fill:var(--bus-dot);stroke:var(--paper);stroke-width:1;vector-effect:non-scaling-stroke}.train.late .vehicle-dot{stroke:var(--warning);stroke-width:1.8}.train.severe .vehicle-dot{stroke:var(--danger)}
+.bus-cluster{cursor:pointer}.cluster-hit{fill:transparent;stroke:none}.cluster-body{fill:var(--paper);stroke:var(--bus-dot);stroke-width:1.4;vector-effect:non-scaling-stroke}.bus-cluster text{fill:var(--bus-dot);font-size:10px;font-weight:700;text-anchor:middle;dominant-baseline:central;pointer-events:none}.bus-cluster.stale{opacity:.4}.bus-cluster.late .cluster-body{stroke:var(--warning)}.bus-cluster.severe .cluster-body{stroke:var(--danger)}
+.cluster-vehicle{display:grid;width:100%;gap:5px;text-align:left;padding:13px 4px;border-bottom:1px solid var(--line);border-radius:5px}.cluster-vehicle strong{font-size:13px}.cluster-vehicle span{font-size:12px}.cluster-vehicle small{font-size:10px;color:var(--muted)}
+.city h1,.city p,.live-hud{text-shadow:0 0 8px var(--paper)}
+@media(max-width:650px){.route-focused .view-controls select{min-width:0;max-width:calc(100vw - 236px)}#route-clear{font-size:11px;padding:5px 10px}}

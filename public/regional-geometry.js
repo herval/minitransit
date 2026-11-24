@@ -38,8 +38,10 @@ export function createMapGeometry(network,scale=1,{lines:enabledLines}={}){
  for(const edge of network.edges){
   const a=network.stations[edge.a],b=network.stations[edge.b];if(!a||!b)continue;
   const lines=edge.lines.filter(id=>!enabledLines||enabledLines.has(id)).sort();
-  lines.forEach((id,index)=>{
-   const line=network.lines[id],base=octilinear(a,b,line.mode==='ferry'),offset=(index-(lines.length-1)/2)*3/scale;
+  const railLines=lines.filter(id=>network.lines[id].mode!=='bus');
+  lines.forEach(id=>{
+   const line=network.lines[id],base=octilinear(a,b,line.mode==='ferry');
+   const offset=line.mode==='bus'?0:(railLines.indexOf(id)-(railLines.length-1)/2)*3/scale;
    const path=metrics(offsetPath(base,offset));
    const shape={...path,a:edge.a,b:edge.b,line:id,agency:line.agency,mode:line.mode};
    shapes.push(shape);direct.set(key(edge.a,edge.b,id),shape);neighbor(id,edge.a,edge.b);neighbor(id,edge.b,edge.a);
@@ -64,6 +66,18 @@ export function createMapGeometry(network,scale=1,{lines:enabledLines}={}){
   const result=points?metrics(points):null;cache.set(id,result);return result;
  }
  return {shapes,path};
+}
+
+// Background corridors have one centered path for each physical edge,
+// regardless of how many routes share it. They do not build train graphs.
+export function createCorridors(network,lines){
+ const shapes=[];
+ for(const edge of network.edges){
+  const ids=edge.lines.filter(id=>lines.has(id));if(!ids.length)continue;
+  const a=network.stations[edge.a],b=network.stations[edge.b];if(!a||!b)continue;
+  for(const mode of new Set(ids.map(id=>network.lines[id].mode)))shapes.push({points:octilinear(a,b,mode==='ferry'),mode});
+ }
+ return shapes;
 }
 
 export function locateTrain(train,network,geometry,now){
