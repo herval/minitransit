@@ -260,15 +260,15 @@ function updateControls() {
 }
 function chooseNetwork(id) {
   focus=id; line='all'; if (id==='AC') buses=true; followed=null;selected=null;
-  closePanel(false); buildLineSelect(); scope(); updateControls(); fit({overview:false});
+  closePanel(false); buildLineSelect(); scope(); updateControls();userMoved=true;drawView(true);
   $('#network-tabs [data-network="'+id+'"]').scrollIntoView({block:'nearest',inline:'nearest'}); renderStatus();
 }
-function chooseLine(id,{refit=true}={}){
+function chooseLine(id){
   if(id!=='all'&&!network.lines[id])return;
   line=id;selected=null;followed=null;
   if(id!=='all'){focus=network.lines[id].agency;if(focus==='AC')buses=true;}
   closePanel(false);buildLineSelect();scope();updateControls();
-  if(refit)fit({overview:false});else drawView(true);
+  userMoved=true;drawView(true);
   renderStatus();
 }
 function populateStations(query=$('#station-search').value) {
@@ -304,7 +304,7 @@ function chooseStation(id,keepTrain=false) {
 function chooseTrain(id) {
   const train=trains.get(id); if (!train) return;
   if(network.lines[train.raw.line].mode==='bus'&&busOverview()){
-    focus=train.raw.agency;line=train.raw.line;buses=true;buildLineSelect();scope();updateControls();drawView(true);
+    focus=train.raw.agency;line=train.raw.line;buses=true;buildLineSelect();scope();updateControls();userMoved=true;drawView(true);
   }
   const stop=train.position?.to||train.raw.mapMotion?.anchor?.to||train.raw.mapMotion?.windows?.[0]?.to;
   if (stop) selected=stop; followed=id; stationsDirty=true;
@@ -624,7 +624,7 @@ map.addEventListener('wheel',event=>{event.preventDefault();zoom(Math.exp(Math.m
 $('#zoom-in').onclick=()=>zoom(.75); $('#zoom-out').onclick=()=>zoom(1/.75); $('#reset').onclick=()=>network&&fit({overview:true});
 $('#buses').onclick=()=>{buses=!buses;focus='all';line='all';selected=null;followed=null;closePanel(false);buildLineSelect();scope();updateControls();drawView(true);};
 $('#line-select').onchange=event=>chooseLine(event.target.value);
-$('#route-clear').onclick=()=>chooseLine('all',{refit:false});
+$('#route-clear').onclick=()=>chooseLine('all');
 $('#labels').onclick=()=>{labels=!labels;attr($('#labels'),'aria-pressed',labels);attr($('#labels'),'aria-label',labels?'Hide station names':'Show station names');stationsDirty=true;layoutStations();renderCues();};
 function togglePause() { paused=!paused;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');vehiclesDirty=true;requestFrame(); }
 $('#pause').onclick=togglePause;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');$('#close-panel').onclick=()=>closePanel();
