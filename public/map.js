@@ -23,7 +23,7 @@ const canvas = document.createElement('canvas'), measure = canvas.getContext('2d
 const widths = new Map(), colors = new Map(), clockFormatter = new Intl.DateTimeFormat('en-GB', {timeZone:'America/Los_Angeles', hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
 let network, geometry, snapshot, focus = 'all', line = 'all', buses = false, labels = true;
 let paused = matchMedia('(prefers-reduced-motion: reduce)').matches, selected = null, followed = null, clockOffset = 0, trigger = null;
-let view = {x:-450, y:0, w:1700, h:2500}, viewport, scale = 1, userMoved = false;
+let view = {x:-450, y:0, w:1700, h:2500}, viewport, scale = 1, userMoved = false, cameraOverview = false;
 let activeLines = new Set(), activeStations = [], activeTrains = [], geometryKey = '', geometryRevision = 0;
 let stationNodes = new Map(), routeNodes = new Map(), trains = new Map(), cueNodes = new Map(), lanes = new Map();
 let labelOccupied = [], upcomingRows = new Map(), viewportRevision = '', frameHandle = 0;
@@ -76,14 +76,25 @@ function scope() {
   for (const train of trains.values()) if (train.el && !enabledLine(train.raw.line)) { train.el.remove(); train.el=train.body=train.shape=null; }
   geometryDirty = stationsDirty = vehiclesDirty = cuesDirty = true; statusRevision = ''; viewportRevision = '';
 }
-function fit() {
+function fit({overview = cameraOverview} = {}) {
   if (!activeStations.length) return;
-  userMoved=false;
+  userMoved=false; cameraOverview=overview;
   const xs = activeStations.map(stop => stop.x), ys = activeStations.map(stop => stop.y), rect = bounds(), mobile = innerWidth <= 650;
   const width = Math.max(14, Math.max(...xs)-Math.min(...xs)), height = Math.max(14, Math.max(...ys)-Math.min(...ys));
   const top = mobile ? 155 : 180, bottom = mobile ? 190 : 165;
-  const k = Math.min((rect.width-(mobile?65:140))/width, (rect.height-top-bottom)/height);
-  view = {x:(Math.max(...xs)+Math.min(...xs))/2-rect.width/k/2, y:(Math.max(...ys)+Math.min(...ys))/2-(top+(rect.height-top-bottom)/2)/k, w:rect.width/k, h:rect.height/k};
+  const opening = !overview && line === 'all';
+  const magnification = opening ? focus === 'all' ? 3.5 : focus === 'AC' ? 16 : 2 : 1;
+  const k = Math.min((rect.width-(mobile?65:140))/width, (rect.height-top-bottom)/height)*magnification;
+  let center = {x:(Math.max(...xs)+Math.min(...xs))/2,y:(Math.max(...ys)+Math.min(...ys))/2};
+  if (opening) {
+    // Start the regional map on the central Bay and AC Transit on downtown Oakland.
+    const anchor = {all:[37.79,-122.35],AC:[37.804,-122.271]}[focus];
+    center = anchor ? project(...anchor,network.projectionAngle) : {
+      x:xs.reduce((a,b)=>a+b,0)/xs.length,
+      y:ys.reduce((a,b)=>a+b,0)/ys.length
+    };
+  }
+  view = {x:center.x-rect.width/k/2, y:center.y-(top+(rect.height-top-bottom)/2)/k, w:rect.width/k, h:rect.height/k};
   clearTimeout(geometryTimer); geometryTimer = null; drawView(true);
 }
 function rebuildGeometry() {
@@ -137,7 +148,7 @@ function layoutStations() {
   if (!network) return;
   const rect = bounds(), visible = new Set();
   const occupied = [{x:0,y:0,w:Math.min(360,rect.width*.65),h:155},{x:rect.width-300,y:0,w:300,h:100},{x:0,y:rect.height-155,w:rect.width,h:155}];
-  const detail = focus !== 'all' && focus !== 'AC' || scale > 1.3;
+  const detail = focus !== 'all' && focus !== 'AC' || scale > (focus === 'all' ? 3 : 1.3);
   const busCells=new Set(),busBudget=innerWidth<=650?180:600;let busStops=0;
   const chosen = selected && network.stations[selected];
   const ordered = chosen && enabledStation(chosen) ? [chosen,...activeStations.filter(stop=>stop.id!==selected)] : activeStations;
@@ -206,7 +217,7 @@ function updateControls() {
 }
 function chooseNetwork(id) {
   focus=id; line='all'; if (id==='AC') buses=true; followed=null;
-  closePanel(false); buildLineSelect(); scope(); updateControls(); fit();
+  closePanel(false); buildLineSelect(); scope(); updateControls(); fit({overview:false});
   $('#network-tabs [data-network="'+id+'"]').scrollIntoView({block:'nearest',inline:'nearest'}); renderStatus();
 }
 function populateStations(query=$('#station-search').value) {
@@ -429,7 +440,7 @@ async function poll() {
     if (response.status!==304) {
       if (!response.ok) throw Error('Feed unavailable');
       const value=await response.json();
-      if (value.schedule.networkVersion!==network.builtAt) { await loadNetwork(); fit(); }
+      if (value.schedule.networkVersion!==network.builtAt) { await loadNetwork(); if (!userMoved) fit(); else drawView(true); }
       snapshot=value; if (!(stamp>0)) clockOffset=value.serverTime-Date.now(); etag=response.headers.get('ETag')||'';
       syncTrains(); statusRevision=''; message('');
     }
@@ -497,9 +508,9 @@ map.addEventListener('pointermove',event=>{
 map.addEventListener('pointerup',event=>{const tap=gesture?.kind==='pan'&&!gesture.moved;pointers.delete(event.pointerId);beginGesture();if(tap)closePanel(false);});
 map.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);beginGesture();});
 map.addEventListener('wheel',event=>{event.preventDefault();zoom(Math.exp(Math.max(-100,Math.min(100,event.deltaY))*.002),{x:event.clientX,y:event.clientY});},{passive:false});
-$('#zoom-in').onclick=()=>zoom(.75); $('#zoom-out').onclick=()=>zoom(1/.75); $('#reset').onclick=()=>network&&fit();
-$('#buses').onclick=()=>{buses=!buses;focus='all';line='all';buildLineSelect();scope();updateControls();fit();};
-$('#line-select').onchange=event=>{line=event.target.value;scope();updateControls();fit();};
+$('#zoom-in').onclick=()=>zoom(.75); $('#zoom-out').onclick=()=>zoom(1/.75); $('#reset').onclick=()=>network&&fit({overview:true});
+$('#buses').onclick=()=>{buses=!buses;focus='all';line='all';buildLineSelect();scope();updateControls();drawView(true);};
+$('#line-select').onchange=event=>{line=event.target.value;scope();updateControls();fit({overview:false});};
 $('#labels').onclick=()=>{labels=!labels;attr($('#labels'),'aria-pressed',labels);attr($('#labels'),'aria-label',labels?'Hide station names':'Show station names');stationsDirty=true;layoutStations();renderCues();};
 function togglePause() { paused=!paused;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');vehiclesDirty=true;requestFrame(); }
 $('#pause').onclick=togglePause;attr($('#pause'),'aria-pressed',paused);attr($('#pause'),'aria-label',paused?'Resume movement':'Pause movement');$('#close-panel').onclick=()=>closePanel();
