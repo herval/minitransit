@@ -1,6 +1,7 @@
 import {AGENCIES, AGENCY_BY_ID, project, REGIONAL_MAX_AGE} from './networks.js';
 import {sourceState, trainDelay, serviceGaps} from './model.js';
 import {createMapGeometry, locateTrain, remainingStops, pointAt} from './regional-geometry.js';
+import {waterPath} from './water.js';
 
 const $ = selector => document.querySelector(selector), NS = 'http://www.w3.org/2000/svg';
 const attributes = new WeakMap();
@@ -191,8 +192,7 @@ function buildMap() {
   for (const train of trains.values()) train.el=train.body=train.shape=null;
   geometry=null; geometryKey=''; viewportRevision='';
   $('#water').replaceChildren();
-  const coast=[[-122.49,37.82],[-122.43,37.93],[-122.51,38.02],[-122.49,38.10],[-122.28,38.13],[-122.04,38.06],[-122.17,37.96],[-122.32,37.86],[-122.30,37.80],[-122.24,37.75],[-122.12,37.64],[-121.96,37.47],[-122.04,37.43],[-122.18,37.48],[-122.32,37.62],[-122.39,37.75]].map(([lon,lat])=>project(lat,lon,network.projectionAngle));
-  make('path',{class:'water',d:coast.map((p,i)=>(i?'L':'M')+p.x+','+p.y).join(' ')+'Z'},$('#water'));
+  make('path',{class:'water',d:waterPath(network.projectionAngle),'fill-rule':'nonzero'},$('#water'));
   buildTabs(); buildLineSelect(); scope(); updateControls();
 }
 function buildTabs() {

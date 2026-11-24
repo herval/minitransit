@@ -2,7 +2,7 @@
 
 A live Bay Area transit map inspired by Mini Metro. Includes BART, Caltrain, Muni rail, VTA light rail, San Francisco Bay Ferry, SMART and AC Transit. Public app: https://minitransit.fly.dev.
 
-Choose a network to fit its routes and stops. The regional overview shows rail and ferries; **+ Buses** adds AC Transit, and its network tab opens the bus view. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks and a saved night mode are included.
+The map opens closer around SF/Oakland; network tabs open closer views of their routes and stops. **Fit** shows the full selected network. The regional view shows rail and ferries; **+ Buses** adds AC Transit, and its network tab opens downtown Oakland. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks and a saved night mode are included.
 
 ## Run locally
 
@@ -46,6 +46,15 @@ node scripts/prepare-region.mjs /path/to/regional.zip
 ```
 
 The schematic rotates geography and simplifies paths into straight and diagonal segments; it is not a geographic navigation map. Muni buses, cable cars and VTA buses are outside this version. Stops explicitly marked nonpublic are hidden.
+
+The water backdrop comes from [U.S. Census Bureau TIGERweb areal hydrography](https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Hydro/MapServer/1), clipped to the Bay Area and simplified to roughly 10-meter tolerance. It preserves island holes and uses the same latitude/longitude projection as station coordinates in desktop and phone layouts. The shoreline is bundled in `public/water-data.js`, with one cached SVG path per projection; there are no runtime Census requests or map tiles.
+
+To rebuild the bundled shoreline from the public Census service, or an already saved GeoJSON extract:
+
+```sh
+node scripts/prepare-water.mjs
+node scripts/prepare-water.mjs /path/to/shoreline.geojson
+```
 
 ## Server and deployment
 
