@@ -3,6 +3,7 @@ import {sourceState, trainDelay, serviceGaps} from './model.js';
 import {createMapGeometry, createCorridors, locateTrain, remainingStops, pointAt} from './regional-geometry.js';
 import {waterPath} from './water.js';
 import {busHubName,busHubPriority,stationRadius,clusterVehicles} from './map-overview.js';
+import {vehicleOccupancy,stationPressure,pressureFillPath} from './map-crowding.js';
 
 const $ = selector => document.querySelector(selector), NS = 'http://www.w3.org/2000/svg';
 const attributes = new WeakMap();
@@ -32,6 +33,7 @@ let labelOccupied = [], upcomingRows = new Map(), viewportRevision = '', frameHa
 const corridorCache=new Map(),clusterRows=new Map();let clusterSelection=[];
 let cameraDirty = false, geometryDirty = true, stationsDirty = true, vehiclesDirty = true, cuesDirty = true, tickDue = true;
 let geometryTimer, pollTimer, fetching = false, etag = '', lastFrame = 0, statusRevision = '';
+let pressureMoving=false,lastPressureFrame=0;
 const stationDetails = new Map(), trainDetails = new Map(), detailRequests = new Map();
 const now = () => Date.now() + clockOffset;
 const fresh = stamp => sourceState(stamp, now(), REGIONAL_MAX_AGE) === 'live';
@@ -80,7 +82,7 @@ function scope() {
   const priority=stop=>(focus==='AC'&&busOverview()?busHubPriority(stop):0)+Number(stop.major)*10+stop.agencies.length;
   activeStations = Object.values(network.stations).filter(enabledStation).sort((a,b) => priority(b)-priority(a) || a.id.localeCompare(b.id));
   activeTrains = [...trains.values()].filter(train => enabledLine(train.raw.line));
-  for (const train of activeTrains) train.delay=trainDelay(train.raw,now());
+  updateVehicleStates();
   for (const train of trains.values()) if (train.el && !enabledLine(train.raw.line)) { train.el.remove(); train.el=train.body=train.shape=null; }
   geometryDirty = stationsDirty = vehiclesDirty = cuesDirty = true; statusRevision = ''; viewportRevision = '';
 }
@@ -174,8 +176,8 @@ function labelWidth(stop,name=stop.name.replace(/ Station$/i,'')) {
 }
 function createStation(stop) {
   const el = make('g', {class:'station'+(stop.agencies.length>1?' transfer':''), transform:`translate(${stop.x} ${stop.y})`, tabindex:0, role:'button', 'aria-label':stop.name+', '+stop.agencies.map(id=>AGENCY_BY_ID[id].short).join(', '), 'data-station':stop.id, visibility:'visible'}, stationsLayer);
-  text(make('title',{},el),stop.name);
-  return {el, hit:make('circle',{class:'hit'},el), shape:make('circle',{class:'node'},el), label:null, data:stop};
+  const title=make('title',{},el);text(title,stop.name);
+  return {el,title, hit:make('circle',{class:'hit'},el), shape:make('circle',{class:'node'},el), fill:make('path',{class:'station-fill','aria-hidden':true},el), label:null, data:stop};
 }
 function layoutStations() {
   if (!network) return;
@@ -214,6 +216,7 @@ function layoutStations() {
     visible.add(stop.id); let node = stationNodes.get(stop.id);
     if (!node) { node=createStation(stop); stationNodes.set(stop.id,node); }
     attr(node.shape,'r',radius); attr(node.hit,'r',Math.max(11/scale,radius));
+    node.radius=radius;
     attr(node.el,'class','station'+(stop.agencies.length>1?' transfer':'')+(chosenStop?' selected':'')+(bus&&quiet?' bus-overview':''));
     if (placement) {
       occupied.push(placement.box);if(bus)busLabels++;
@@ -223,7 +226,36 @@ function layoutStations() {
     } else if (node.label) { node.label.remove(); node.label=null; }
   }
   for (const [id,node] of stationNodes) if (!visible.has(id)) { node.el.remove(); node.label?.remove(); stationNodes.delete(id); }
-  labelOccupied=occupied; stationsDirty=false; cuesDirty=true;
+  labelOccupied=occupied; stationsDirty=false; cuesDirty=true;renderStationPressure(performance.now());
+}
+function pressureLabel(value){return !value?'Delay pressure unknown':value.severity==='high'?'High delay pressure':value.severity==='building'?'Building delay pressure':'Low delay pressure';}
+function pressureDetail(value){
+  if(!value)return 'No fresh delay report for the next departures.';
+  const route=network.lines[value.line]?.name||'service',delay=value.delay;
+  return 'Next '+route+' departure in one direction '+(delay>=60?'reported +'+Math.round(delay/60)+'m late':delay<0?'reported early':'has no significant reported delay')+(value.partial?'; some directions have no delay report':'')+'.';
+}
+function renderStationPressure(time=performance.now(),refresh=true){
+  let moving=false;
+  for(const node of stationNodes.values()){
+    if(refresh){
+      const value=stationPressure(snapshot?.trips.pressure?.[node.data.id],now(),enabledLine),target=value?.level??0;
+      node.pressure=value;
+      if(node.pressureLevel==null||!value||paused){node.pressureLevel=target;node.pressureTarget=target;}
+      if(node.pressureTarget!==target){node.pressureFrom=node.pressureLevel;node.pressureTarget=target;node.pressureSince=time;}
+      attr(node.fill,'class','station-fill '+(value?value.severity:'unknown'));
+      attr(node.el,'data-pressure',value?.severity??'unknown');
+      const description=pressureLabel(value)+'. '+pressureDetail(value)+' Inferred from lateness, not a passenger count.';
+      text(node.title,node.data.name+'\n'+description);attr(node.el,'aria-label',node.data.name+', '+node.data.agencies.map(id=>AGENCY_BY_ID[id].short).join(', ')+'. '+description);
+    }
+    if(node.pressureLevel!==node.pressureTarget){
+      const progress=paused?1:Math.min(1,(time-node.pressureSince)/900);
+      node.pressureLevel=node.pressureFrom+(node.pressureTarget-node.pressureFrom)*progress;
+      if(progress===1)node.pressureLevel=node.pressureTarget;else moving=true;
+    }
+    const radius=Math.max(0,node.radius-1.25/scale);
+    attr(node.fill,'d',node.pressure?pressureFillPath(radius,node.pressureLevel):`M${-radius*.4} 0H${radius*.4}`);
+  }
+  pressureMoving=moving;lastPressureFrame=time;
 }
 function buildMap() {
   routesLayer.replaceChildren(); stationsLayer.replaceChildren(); labelsLayer.replaceChildren(); trainsLayer.replaceChildren(); clustersLayer.replaceChildren();cuesLayer.replaceChildren();
@@ -256,7 +288,7 @@ function updateControls() {
   document.body.classList.toggle('route-focused',focused);$('#route-clear').hidden=!focused;
   text($('#network-caption'),focused?'Route '+network.lines[line].name+' · '+activeStations.length+' stops':focus==='AC'?'Bus overview · choose a route for detail':focus==='all'?(buses?'Rail, ferries & bus corridors':'Six rail & ferry networks · buses optional'):network.counts[focus].stations+' stops · '+AGENCY_BY_ID[focus].name);
   text($('#explore-hint'),quiet?'Choose a route · numbers group nearby buses':focused?'Tap a stop or vehicle for details':'Drag to explore · fit to see the whole network');
-  text($('#cue-note'),quiet?'Amber/red marks delays · route views show gap clocks':'Outlines show delays · clocks show gaps');
+  text($('#cue-note'),quiet?'Station fill estimates delay pressure · tap buses for occupancy':'Station fill = delay pressure · vehicle dots = reported occupancy');
 }
 function chooseNetwork(id) {
   focus=id; line='all'; if (id==='AC') buses=true; followed=null;selected=null;
@@ -314,23 +346,30 @@ function createTrain(train,compact=false) {
   const raw=train.raw, meta=network.lines[raw.line];
   const el=make('g',{class:'train',tabindex:0,role:'button','aria-label':AGENCY_BY_ID[raw.agency].short+' '+raw.headsign,'data-agency':raw.agency,'data-train':raw.id,visibility:'visible'},trainsLayer);
   const body=make('g',{},el);
+  const title=make('title',{},el);
   if(compact){
     make('circle',{r:11,fill:'transparent'},body);
     const shape=make('circle',{class:'vehicle-dot',r:2.8},body);
-    Object.assign(train,{el,body,shape,renderKind:'dot'});return;
+    Object.assign(train,{el,body,shape,title,passengers:null,renderKind:'dot'});return;
   }
   make('rect',{class:'vehicle-outline',x:-11,y:-6,width:22,height:12,rx:3},body);
   const path=meta.mode==='ferry'?'M-10 -4 L7 -4 L11 0 L7 4 L-10 4Z':meta.mode==='bus'?'M-8 -4 H8 V4 H-8Z':'M-10 -4 H10 V4 H-10Z';
   const shape=make('path',{class:'vehicle-body',d:path,fill:color(meta.color)},body); make('path',{class:'vehicle-window',d:'M3 -2 H6 V2 H3Z'},body);
-  Object.assign(train,{el,body,shape,renderKind:'vehicle'});
+  const passengers=make('path',{class:'vehicle-passengers','aria-hidden':true},body);
+  Object.assign(train,{el,body,shape,title,passengers,renderKind:'vehicle'});
 }
 function paintTrain(train,compact=false){
   if(train.el&&train.renderKind!==(compact?'dot':'vehicle')){train.el.remove();train.el=null;}
   if(!train.el)createTrain(train,compact);
   const position=train.position;
+  const occupancy=train.occupancy||vehicleOccupancy(train.raw,now()),detail=focus!=='all'||scale>=5;
   attr(train.el,'class','train'+(compact?' bus-dot':'')+(!position?' stale':'')+(train.delay?.seconds>=60&&position?' late':'')+(train.delay?.seconds>=300&&position?' severe':''));
   attr(train.el,'transform',`translate(${train.last.x.toFixed(3)} ${train.last.y.toFixed(3)})`);
-  attr(train.body,'transform',`scale(${(compact?1:focus==='all'?.6:1)/scale}) rotate(${compact?0:train.last.angle.toFixed(3)})`);
+  attr(train.body,'transform',`scale(${(compact||detail?1:.6)/scale}) rotate(${compact?0:train.last.angle.toFixed(3)})`);
+  attr(train.el,'data-occupancy',occupancy.known?occupancy.code:'unknown');
+  if(train.passengers){attr(train.passengers,'d',occupancy.path);attr(train.passengers,'visibility',detail?'visible':'hidden');}
+  const description=AGENCY_BY_ID[train.raw.agency].short+' '+train.raw.headsign+' · '+occupancy.label+(occupancy.known?' (reported)':'')+(occupancy.stale?' · report stale':'');
+  text(train.title,description);attr(train.el,'aria-label',description);
 }
 function paintCluster(group,used){
   const members=group.members.map(point=>point.train),id=JSON.stringify(members.map(train=>train.raw.id));used.add(id);
@@ -359,7 +398,8 @@ function renderBusCluster(){
     if(!row){const button=document.createElement('button');button.className='cluster-vehicle';button.dataset.train=id;
       const name=document.createElement('strong'),destination=document.createElement('span'),status=document.createElement('small');button.append(name,destination,status);button.onclick=()=>chooseTrain(id);$('#cluster-list').append(button);row={button,name,destination,status};clusterRows.set(id,row);}
     text(row.name,'Route '+network.lines[train.raw.line].name);text(row.destination,train.raw.headsign);
-    text(row.status,!train.position?'Last known position':train.delay?.seconds>=60?'Reported delay +'+Math.round(train.delay.seconds/60)+'m':'Select for upcoming stops');
+    const occupancy=train.occupancy||vehicleOccupancy(train.raw,now());
+    text(row.status,(!train.position?'Last known position':train.delay?.seconds>=60?'Reported delay +'+Math.round(train.delay.seconds/60)+'m':'Live location')+' · '+occupancy.label);
   }
   for(const [id,row]of clusterRows)if(!used.has(id)){row.button.remove();clusterRows.delete(id);}
   text($('#cluster-summary'),used.size?used.size+' buses in this group. Choose one to see its route and stops.':'These buses are no longer reported.');
@@ -369,13 +409,18 @@ function syncTrains() {
   for (const raw of snapshot.trips.trains) {
     ids.add(raw.id); let train=trains.get(raw.id);
     if (!train) { train={raw,el:null,last:null,position:null}; trains.set(raw.id,train); }
-    train.raw=raw; train.reportedKey=null; train.delay=trainDelay(raw,now());
+    train.raw=raw; train.reportedKey=null;
   }
   for (const [id,train] of trains) if (!ids.has(id)) { train.el?.remove(); trains.delete(id); }
   activeTrains=[...trains.values()].filter(train=>enabledLine(train.raw.line));
+  updateVehicleStates();
   const activeIds=new Set(activeTrains.map(train=>train.raw.id));
   for (const train of trains.values()) if (train.el&&!activeIds.has(train.raw.id)) { train.el.remove(); train.el=train.body=train.shape=null; }
   vehiclesDirty=cuesDirty=true;
+}
+function updateVehicleStates(){
+  const stamp=now();
+  for(const train of activeTrains){train.delay=trainDelay(train.raw,stamp);train.occupancy=vehicleOccupancy(train.raw,stamp);}
 }
 function positionFor(train,stamp) {
   const anchor=train.raw.mapMotion?.anchor;
@@ -482,6 +527,10 @@ function renderStation() {
   if (!network||!selected) return;
   const stop=network.stations[selected]; if (!stop) return;
   text($('#station-meta'),stop.agencies.map(id=>AGENCY_BY_ID[id].name).join(' · ')+' · live predictions when available');
+  const pressure=stationPressure(snapshot?.trips.pressure?.[selected],now(),enabledLine);
+  text($('#pressure-status'),pressureLabel(pressure));text($('#pressure-detail'),pressureDetail(pressure));
+  attr($('#pressure-sample'),'class','pressure-sample '+(pressure?pressure.severity:'unknown'));
+  attr($('#pressure-sample-fill'),'d',pressure?pressureFillPath(5,pressure.level):'M-2 0H2');
   const entry=stationDetails.get(selected),departures=entry?.value?.departures||[], rows=departures.filter(value=>fresh(value.timestamp)&&value.time>=now()/1000-15).slice(0,12);
   const empty=!entry?'Loading departures…':entry.error?'Departures could not be loaded. Retrying shortly…':'No fresh departures are reported for this stop right now. Scheduled services may still operate.';
   html($('#departures'),rows.length?rows.map(value=>{
@@ -495,7 +544,7 @@ function renderStation() {
 function renderTrainCard() {
   $('#train-card').hidden=!followed; if (!followed) return;
   const train=trains.get(followed), list=$('#upcoming-stops');
-  if (!train) { text($('#train-name'),'Trip no longer reported'); text($('#train-detail'),'This trip left the latest feed.'); text($('#train-delay'),''); list.replaceChildren(); upcomingRows.clear(); $('#upcoming-empty').hidden=false; text($('#upcoming-empty'),'No current predictions.'); return; }
+  if (!train) { text($('#train-name'),'Trip no longer reported'); text($('#train-detail'),'This trip left the latest feed.'); text($('#train-delay'),'');html($('#train-occupancy'),'Occupancy unknown'); list.replaceChildren(); upcomingRows.clear(); $('#upcoming-empty').hidden=false; text($('#upcoming-empty'),'No current predictions.'); return; }
   if (list.dataset.train!==followed) { list.replaceChildren(); upcomingRows.clear(); list.dataset.train=followed; }
   const meta=network.lines[train.raw.line],entry=trainDetails.get(followed),full=entry?.value?.train;
   text($('#vehicle-label'),'Selected '+(meta.mode==='ferry'?'ferry':meta.mode==='bus'?'bus':'train')); text($('#train-name'),AGENCY_BY_ID[train.raw.agency].short+' · '+train.raw.headsign);
@@ -503,6 +552,8 @@ function renderTrainCard() {
   const delay=train.position?trainDelay(full||train.raw,now()):null;
   text($('#train-delay'),delay?(delay.seconds>=60?'Reported +'+Math.round(delay.seconds/60)+'m late':delay.seconds<0?'Reported early':'Reported on time')+' at '+(network.stations[delay.station]?.name||'next stop')+'.':'Delay not reported for the next stop.');
   attr($('#train-delay'),'class','train-delay'+(delay?.seconds>=300?' severe':delay?.seconds>=60?' late':''));
+  const occupancy=vehicleOccupancy(train.raw,now());
+  html($('#train-occupancy'),`<svg class="occupancy-swatch" viewBox="-11 -5 22 10" aria-hidden="true"><rect x="-10" y="-4" width="20" height="8" rx="2" fill="${color(meta.color)}"/><path class="vehicle-passengers" d="${occupancy.path}"/></svg><span><strong>${esc(occupancy.label)}</strong><small>${occupancy.known?'Reported · '+age(occupancy.timestamp):occupancy.stale?'Report stale · '+age(occupancy.timestamp):'No current occupancy report'}</small></span>`);
   const stops=full?remainingStops(full,train.position,now()):[],keys=new Set(); $('#upcoming-empty').hidden=!!stops.length;
   text($('#upcoming-empty'),!entry?'Loading upcoming stops…':entry.error==='missing'?'Trip no longer reported.':entry.error?'Stop details could not be loaded. Retrying shortly…':'No fresh upcoming-stop predictions.');
   stops.forEach((stop,index)=>{
@@ -556,7 +607,7 @@ async function poll() {
       snapshot=value; if (!(stamp>0)) clockOffset=value.serverTime-Date.now(); etag=response.headers.get('ETag')||'';
       syncTrains(); statusRevision=''; message('');
     }
-    for (const train of activeTrains) train.delay=trainDelay(train.raw,now());
+    updateVehicleStates();renderStationPressure(performance.now());
     renderVehicles(performance.now()); renderStatus(); if (!$('#inspector').hidden&&!$('#station-panel').hidden) { renderStation(); ensureDetails(); } cuesDirty=true; renderCues(); requestFrame();
   } catch { if (!snapshot) message('The live feed is taking longer to connect. Retrying shortly…'); text($('#connection-text'),'Connection delayed'); attr($('#connection-dot'),'class','dot stale'); }
   finally { fetching=false; pollTimer=setTimeout(poll,20000); }
@@ -570,13 +621,14 @@ function animate(time) {
   if (vehiclesDirty||moving&&time-lastFrame>=32) { renderVehicles(time); lastFrame=time; }
   if (tickDue) {
     tickDue=false;
-    for (const train of activeTrains) train.delay=trainDelay(train.raw,now());
+    updateVehicleStates();renderStationPressure(time);
     renderVehicles(time); renderStatus();
     if (!$('#inspector').hidden&&!$('#station-panel').hidden) { renderStation(); ensureDetails(); }
     cuesDirty=true;
   }
   if (cuesDirty) renderCues();
-  if (moving||cameraDirty) requestFrame();
+  if(pressureMoving&&time-lastPressureFrame>=32)renderStationPressure(time,false);
+  if (moving||cameraDirty||pressureMoving) requestFrame();
 }
 function localPoint(x,y) { const rect=bounds(); return {x:view.x+(x-rect.left-(rect.width-view.w*scale)/2)/scale,y:view.y+(y-rect.top-(rect.height-view.h*scale)/2)/scale}; }
 function scheduleView(zooming=false) {

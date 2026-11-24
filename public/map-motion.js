@@ -39,7 +39,7 @@ export function compactVehicle(train,network){
  const predictions=train.stops.filter(s=>!s.skipped&&(s.departure??s.arrival)>=lo);
  const following=predictions.find(s=>(s.departure??s.arrival)>hi);
  const delays=predictions.filter(s=>s===following||(s.departure??s.arrival)<=hi).map(s=>({station:s.station,arrival:s.arrival,departure:s.departure,arrivalDelay:s.arrivalDelay,departureDelay:s.departureDelay,arrivalUncertainty:s.arrivalUncertainty,departureUncertainty:s.departureUncertainty}));
- return {id:train.id,line:train.line,agency:train.agency,headsign:train.headsign,routeName:train.routeName,vehicle:train.vehicle,timestamp:train.timestamp,maxAge,delayTimeline:delays,mapMotion:{anchor:reportedAnchor(train,network),windows:motionWindows(train)}};
+ return {id:train.id,line:train.line,agency:train.agency,headsign:train.headsign,routeName:train.routeName,vehicle:train.vehicle,...(train.occupancy?{occupancy:train.occupancy}:{}),timestamp:train.timestamp,maxAge,delayTimeline:delays,mapMotion:{anchor:reportedAnchor(train,network),windows:motionWindows(train)}};
 }
 
 export function motionAt(train,now){

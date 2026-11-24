@@ -2,9 +2,13 @@
 
 A live Bay Area transit map inspired by Mini Metro. Includes BART, Caltrain, Muni rail, VTA light rail, San Francisco Bay Ferry, SMART and AC Transit. Public app: https://minitransit.fly.dev.
 
-The map opens closer around SF/Oakland. Choosing a network or route preserves the current map position and zoom; **Fit** shows the full selected network or route. The regional view shows rail and ferries; **+ Buses** adds AC Transit. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks and a saved night mode are included.
+The map opens closer around SF/Oakland. Choosing a network or route preserves the current map position and zoom; **Fit** shows the full selected network or route. The regional view shows rail and ferries; **+ Buses** adds AC Transit. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks, station filling, reported vehicle occupancy and a saved night mode are included.
 
 The bus overview bundles shared routes into muted corridors and shows a limited set of named transfer hubs. Bus markers are small dots; nearby buses form numbered groups. Select a group to choose an individual bus, or choose a route above the map. The selected route shows colored tracks, stop names, vehicle icons, delays and gap clocks over a faint network context. **← Overview** returns to the overview without moving the camera. Ordinary bus stops appear at neighborhood zoom; search can always reveal a specific stop. Stop circles have a fixed size limit.
+
+Station circles fill upward with **delay pressure** from the next departure on each route and direction, reaching a full symbol at 10 minutes late. Amber marks delays of 1 minute and red marks 5 minutes. This is an inference from lateness, not a passenger count or measured platform crowding. Fill decreases as the reported delay recovers; a dash marks missing or stale data. The fill remains inside the existing bounded marker. Future service-gap clocks stay separate from current station pressure.
+
+Vehicles show categorical passenger patterns at closer zooms or in a network view, with the exact reported occupancy and report age in their details. Bus overviews keep dots and numbered groups; each group lists occupancy for its individual buses. Occupancy uses the vehicle report timestamp independently of stop predictions and becomes unknown after 180 seconds. Reported empty, missing data, full, and not accepting passengers remain distinct. No passenger counts or percentages are invented.
 
 ## Run locally
 
@@ -31,7 +35,7 @@ Browser modules are served directly. The build validates the required assets. Sp
 
 The map creates SVG elements for the active network and visible stops and vehicles. Rail segments share one SVG path per route; bus overviews use one centered corridor layer, and selected routes retain a faint network context. Stop names use cached measurements and placement; live clock ticks do not rerun the stop layout. Pan and zoom events are combined into animation frames, with lane geometry rebuilt after the zoom gesture settles. Reported locations are resolved once per update, and estimated motion is capped at 30 updates per second. Nearby bus markers group using a spatial grid while preserving every member for selection. Dense bus-stop markers thin out at overview scales and appear with zoom or search.
 
-`/api/live` sends compact motion windows, delay summaries and gap cues. Unchanged snapshots return HTTP 304; `X-Server-Time` keeps the browser clock aligned even when the body is unchanged. Full stop lists and station departures load only when their details are opened. These responses reuse the same upstream cache, so opening details does not increase 511 polling frequency. See [PERFORMANCE.md](PERFORMANCE.md) for the local comparison and validation method.
+`/api/live` sends compact motion windows, delay summaries, occupancy categories, gap cues and short station-pressure windows. Unchanged snapshots return HTTP 304; `X-Server-Time` keeps the browser clock aligned even when the body is unchanged. Full stop lists and station departures load only when their details are opened. These responses reuse the same upstream cache, so opening details does not increase 511 polling frequency. See [PERFORMANCE.md](PERFORMANCE.md) for the local comparison and validation method.
 
 ## Live data
 
