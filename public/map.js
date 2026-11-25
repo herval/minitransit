@@ -24,7 +24,7 @@ const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<'
 const map = $('#map'), routesLayer = $('#routes'), stationsLayer = $('#stations'), labelsLayer = $('#station-labels'), trainsLayer = $('#trains'), clustersLayer = $('#bus-clusters'), cuesLayer = $('#map-cues');
 const canvas = document.createElement('canvas'), measure = canvas.getContext('2d');
 const widths = new Map(), colors = new Map(), clockFormatter = new Intl.DateTimeFormat('en-GB', {timeZone:'America/Los_Angeles', hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
-let network, geometry, snapshot, focus = 'all', line = 'all', buses = false, labels = true;
+let network, geometry, snapshot, focus = 'BA', line = 'all', labels = true;
 let paused = matchMedia('(prefers-reduced-motion: reduce)').matches, selected = null, followed = null, clockOffset = 0, trigger = null;
 let view = {x:-450, y:0, w:1700, h:2500}, viewport, scale = 1, userMoved = false, cameraOverview = false;
 let activeLines = new Set(), contextLines = new Set(), activeStations = [], activeTrains = [], geometryKey = '', geometryRevision = 0;
@@ -37,7 +37,7 @@ let pressureMoving=false,lastPressureFrame=0;
 const stationDetails = new Map(), trainDetails = new Map(), detailRequests = new Map();
 const now = () => Date.now() + clockOffset;
 const fresh = stamp => sourceState(stamp, now(), REGIONAL_MAX_AGE) === 'live';
-const enabledAgency = id => focus === 'all' ? id !== 'AC' || buses : id === focus;
+const enabledAgency = id => id === focus;
 const enabledLine = id => activeLines.has(id);
 const enabledStation = station => station.public !== false && station.lines.some(enabledLine);
 const busOverview = () => line === 'all';
@@ -93,12 +93,12 @@ function fit({overview = cameraOverview} = {}) {
   const width = Math.max(14, Math.max(...xs)-Math.min(...xs)), height = Math.max(14, Math.max(...ys)-Math.min(...ys));
   const top = mobile ? 155 : 180, bottom = mobile ? 190 : 165;
   const opening = !overview && line === 'all';
-  const magnification = opening ? focus === 'all' ? 3.5 : focus === 'AC' ? 16 : 2 : 1;
+  const magnification = opening ? focus === 'AC' ? 16 : 2 : 1;
   const k = Math.min((rect.width-(mobile?65:140))/width, (rect.height-top-bottom)/height)*magnification;
   let center = {x:(Math.max(...xs)+Math.min(...xs))/2,y:(Math.max(...ys)+Math.min(...ys))/2};
   if (opening) {
-    // Start the regional map on the central Bay and AC Transit on downtown Oakland.
-    const anchor = {all:[37.79,-122.35],AC:[37.804,-122.271]}[focus];
+    // Open BART on the central Bay and AC Transit on downtown Oakland.
+    const anchor = {BA:[37.79,-122.35],AC:[37.804,-122.271]}[focus];
     center = anchor ? project(...anchor,network.projectionAngle) : {
       x:xs.reduce((a,b)=>a+b,0)/xs.length,
       y:ys.reduce((a,b)=>a+b,0)/ys.length
@@ -183,7 +183,7 @@ function layoutStations() {
   if (!network) return;
   const rect = bounds(), visible = new Set();
   const occupied = [{x:0,y:0,w:Math.min(360,rect.width*.65),h:155},{x:rect.width-300,y:0,w:300,h:100},{x:0,y:rect.height-155,w:rect.width,h:155}];
-  const detail = focus !== 'all' && focus !== 'AC' || scale > (focus === 'all' ? 3 : 1.3);
+  const detail = focus !== 'AC' || scale > 1.3;
   const mobile=innerWidth<=650,quiet=busOverview(),nearby=scale>=18;
   const busCells=new Set(),hubNames=new Set(),busBudget=quiet&&!nearby?(mobile?6:14):(mobile?40:120),labelBudget=quiet?(mobile?8:18):(mobile?14:30);let busStops=0,busLabels=0;
   const chosen = selected && network.stations[selected];
@@ -268,7 +268,7 @@ function buildMap() {
 }
 function buildTabs() {
   const nav=$('#network-tabs'); nav.replaceChildren();
-  for (const agency of [{id:'all',short:'Bay Area',name:'All rail and ferries',color:'#89969e'},...AGENCIES]) {
+  for (const agency of AGENCIES) {
     const button=document.createElement('button'); button.className='network-tab'; button.dataset.network=agency.id; button.title=agency.name;
     button.style.setProperty('--network-color',agency.color);
     const dot=document.createElement('span'); dot.className='network-dot'; dot.setAttribute('aria-hidden','true'); button.append(dot,document.createTextNode(agency.short));
@@ -276,29 +276,29 @@ function buildTabs() {
   }
 }
 function buildLineSelect() {
-  const select=$('#line-select'); select.replaceChildren(new Option(focus==='AC'?'Overview · choose a route':focus==='all'?(buses?'All networks':'All rail & ferries'):'All '+AGENCY_BY_ID[focus].short+' routes','all'));
-  if (focus!=='all') for (const meta of Object.values(network.lines).filter(meta=>meta.agency===focus).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}))) select.add(new Option(meta.name,meta.id));
+  const select=$('#line-select'); select.replaceChildren(new Option(focus==='AC'?'Overview · choose a route':'All '+AGENCY_BY_ID[focus].short+' routes','all'));
+  for (const meta of Object.values(network.lines).filter(meta=>meta.agency===focus).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}))) select.add(new Option(meta.name,meta.id));
   select.value=line;
 }
 function updateControls() {
   for (const button of document.querySelectorAll('[data-network]')) attr(button,'aria-pressed',button.dataset.network===focus);
-  attr($('#buses'),'aria-pressed',buses); text($('#buses'),buses?'− Buses':'+ Buses');
-  text($('#view-name'),focus==='all'?'Bay Area, in motion.':AGENCY_BY_ID[focus].name+', in motion.');
-  const focused=line!=='all',quiet=busOverview()&&(focus==='AC'||focus==='all'&&buses);
+  text($('#view-name'),AGENCY_BY_ID[focus].name+', in motion.');
+  const focused=line!=='all',quiet=busOverview()&&focus==='AC';
   document.body.classList.toggle('route-focused',focused);$('#route-clear').hidden=!focused;
-  text($('#network-caption'),focused?'Route '+network.lines[line].name+' · '+activeStations.length+' stops':focus==='AC'?'Bus overview · choose a route for detail':focus==='all'?(buses?'Rail, ferries & bus corridors':'Six rail & ferry networks · buses optional'):network.counts[focus].stations+' stops · '+AGENCY_BY_ID[focus].name);
+  text($('#network-caption'),focused?'Route '+network.lines[line].name+' · '+activeStations.length+' stops':focus==='AC'?'Bus overview · choose a route for detail':network.counts[focus].stations+' stops · '+AGENCY_BY_ID[focus].name);
   text($('#explore-hint'),quiet?'Choose a route · numbers group nearby buses':focused?'Tap a stop or vehicle for details':'Drag to explore · fit to see the whole network');
   text($('#cue-note'),quiet?'Station fill estimates delay pressure · tap buses for occupancy':'Station fill = delay pressure · vehicle dots = reported occupancy');
 }
 function chooseNetwork(id) {
-  focus=id; line='all'; if (id==='AC') buses=true; followed=null;selected=null;
+  if(!AGENCY_BY_ID[id])return;
+  focus=id; line='all'; followed=null;selected=null;
   closePanel(false); buildLineSelect(); scope(); updateControls();userMoved=true;drawView(true);
   $('#network-tabs [data-network="'+id+'"]').scrollIntoView({block:'nearest',inline:'nearest'}); renderStatus();
 }
 function chooseLine(id){
   if(id!=='all'&&!network.lines[id])return;
   line=id;selected=null;followed=null;
-  if(id!=='all'){focus=network.lines[id].agency;if(focus==='AC')buses=true;}
+  if(id!=='all')focus=network.lines[id].agency;
   closePanel(false);buildLineSelect();scope();updateControls();
   userMoved=true;drawView(true);
   renderStatus();
@@ -327,7 +327,7 @@ function closePanel(restore=true) {
 function chooseStation(id,keepTrain=false) {
   const stop=network.stations[id]; if (!stop) return;
   let changed=false;
-  if (!enabledStation(stop)) { focus=stop.agencies.find(id=>id!=='AC')||'AC'; line='all'; if (focus==='AC') buses=true; buildLineSelect(); scope(); updateControls(); changed=true; }
+  if (!enabledStation(stop)) { focus=stop.agencies.includes(focus)?focus:stop.agencies.find(id=>AGENCY_BY_ID[id]); line='all'; buildLineSelect(); scope(); updateControls(); changed=true; }
   selected=id; if (!keepTrain) followed=null;
   const p=screen(stop), rect=bounds();
   if (changed||p.x<35||p.x>rect.width-35||p.y<160||p.y>rect.height-160) { const width=Math.min(view.w,400),height=width*rect.height/rect.width; view={x:stop.x-width/2,y:stop.y-height/2,w:width,h:height};userMoved=true; }
@@ -336,7 +336,7 @@ function chooseStation(id,keepTrain=false) {
 function chooseTrain(id) {
   const train=trains.get(id); if (!train) return;
   if(network.lines[train.raw.line].mode==='bus'&&busOverview()){
-    focus=train.raw.agency;line=train.raw.line;buses=true;buildLineSelect();scope();updateControls();userMoved=true;drawView(true);
+    focus=train.raw.agency;line=train.raw.line;buildLineSelect();scope();updateControls();userMoved=true;drawView(true);
   }
   const stop=train.position?.to||train.raw.mapMotion?.anchor?.to||train.raw.mapMotion?.windows?.[0]?.to;
   if (stop) selected=stop; followed=id; stationsDirty=true;
@@ -362,12 +362,12 @@ function paintTrain(train,compact=false){
   if(train.el&&train.renderKind!==(compact?'dot':'vehicle')){train.el.remove();train.el=null;}
   if(!train.el)createTrain(train,compact);
   const position=train.position;
-  const occupancy=train.occupancy||vehicleOccupancy(train.raw,now()),detail=focus!=='all'||scale>=5;
+  const occupancy=train.occupancy||vehicleOccupancy(train.raw,now());
   attr(train.el,'class','train'+(compact?' bus-dot':'')+(!position?' stale':'')+(train.delay?.seconds>=60&&position?' late':'')+(train.delay?.seconds>=300&&position?' severe':''));
   attr(train.el,'transform',`translate(${train.last.x.toFixed(3)} ${train.last.y.toFixed(3)})`);
-  attr(train.body,'transform',`scale(${(compact||detail?1:.6)/scale}) rotate(${compact?0:train.last.angle.toFixed(3)})`);
+  attr(train.body,'transform',`scale(${1/scale}) rotate(${compact?0:train.last.angle.toFixed(3)})`);
   attr(train.el,'data-occupancy',occupancy.known?occupancy.code:'unknown');
-  if(train.passengers){attr(train.passengers,'d',occupancy.path);attr(train.passengers,'visibility',detail?'visible':'hidden');}
+  if(train.passengers){attr(train.passengers,'d',occupancy.path);attr(train.passengers,'visibility','visible');}
   const description=AGENCY_BY_ID[train.raw.agency].short+' '+train.raw.headsign+' · '+occupancy.label+(occupancy.known?' (reported)':'')+(occupancy.stale?' · report stale':'');
   text(train.title,description);attr(train.el,'aria-label',description);
 }
@@ -486,12 +486,10 @@ function cue(key,position,value,severe,{train,station,leader}) {
 function renderCues() {
   if (!network) return;
   const occupied=labelOccupied.slice(), used=new Set(), offsets=[[28,-23],[-28,-23],[34,23],[-34,23],[0,-37],[0,35]];
-  let displayed=0;
   for (const train of activeTrains.filter(train=>train.el&&train.position&&train.delay?.seconds>=60).sort((a,b)=>b.delay.seconds-a.delay.seconds)) {
     if(network.lines[train.raw.line].mode==='bus'&&busOverview())continue;
-    if (focus==='all'&&displayed>=8) break;
     const value='+'+Math.round(train.delay.seconds/60)+'m',p=placeCue(train.last,value,offsets,occupied); if (!p) continue;
-    const key='train:'+train.raw.id; used.add(key); cue(key,p,value,train.delay.seconds>=300,{train:train.raw.id,leader:train.last}); displayed++;
+    const key='train:'+train.raw.id; used.add(key); cue(key,p,value,train.delay.seconds>=300,{train:train.raw.id,leader:train.last});
   }
   for (const gap of snapshot?.trips.gaps||[]) {
     if(network.lines[gap.line]?.mode==='bus'&&busOverview()&&gap.station!==selected)continue;
@@ -568,19 +566,19 @@ function renderTrainCard() {
   });
   for (const [key,row] of upcomingRows) if (!keys.has(key)) { row.el.remove(); upcomingRows.delete(key); }
 }
-function activeAlerts() { return (snapshot?.alerts.items||[]).filter(alert=>focus==='all'?alert.agencies?.some(enabledAgency)||alert.lines.some(enabledLine):alert.agencies?.includes(focus)||alert.lines.some(enabledLine)); }
+function activeAlerts() { return (snapshot?.alerts.items||[]).filter(alert=>alert.agencies?.includes(focus)||alert.lines.some(enabledLine)); }
 function renderStatus() {
   if (!snapshot) return;
   const live=fresh(snapshot.trips.timestamp)||fresh(snapshot.vehicles.timestamp), alerts=activeAlerts();
-  text($('#connection-text'),live?'Live '+(focus==='all'?'Bay Area':AGENCY_BY_ID[focus].short):'Feed delayed'); attr($('#connection-dot'),'class','dot '+(live?'live':'stale'));
+  text($('#connection-text'),live?'Live '+AGENCY_BY_ID[focus].short:'Feed delayed'); attr($('#connection-dot'),'class','dot '+(live?'live':'stale'));
   $('#alert-count').hidden=!alerts.length; text($('#alert-count'),alerts.length);
   const date=new Date(now()); text($('.clock'),clockFormatter.format(date)); attr($('.clock'),'datetime',date.toISOString());
   if ($('#inspector').hidden||$('#network-panel').hidden) return;
   const revision=[etag,focus,line,live,sourceState(snapshot.alerts.timestamp,now(),900)].join('|');
   if (statusRevision!==revision) {
     statusRevision=revision;
-    const count=Object.values(snapshot.trips.byAgency||{}).reduce((sum,value)=>sum+value.positioned,0);
-    html($('#status-card'),`<h3>${live?'The Bay Area, in motion.':'Waiting for fresh transit data.'}</h3><p>${live?count+' reported or estimated vehicle positions across seven networks.':'Last positions stay frozen while the feeds recover.'} Choose a network to explore its routes.</p>`);
+    const count=snapshot.trips.byAgency?.[focus]?.positioned||0;
+    html($('#status-card'),`<h3>${live?esc(AGENCY_BY_ID[focus].name)+', in motion.':'Waiting for fresh transit data.'}</h3><p>${live?count+' reported or estimated vehicle positions on this network.':'Last positions stay frozen while the feeds recover.'} Choose a route to explore its stops.</p>`);
     html($('#network-health'),AGENCIES.map(agency=>{const count=snapshot.trips.byAgency?.[agency.id]||{}; return `<div class="health-row"><span>${esc(agency.name)}</span><span>${live?count.positioned||0:0} active · ${live?count.reported||0:0} reported</span></div>`;}).join(''));
     html($('#alerts-list'),sourceState(snapshot.alerts.timestamp,now(),900)==='live'?(alerts.length?alerts.map(alert=>`<article class="alert-item"><h4>${esc(alert.header)}</h4><p>${esc(alert.description)}</p></article>`).join(''):'<p class="empty-state">No active alerts are reported for this view.</p>'):'<p class="empty-state">Service alert source is stale or unavailable.</p>');
   }
@@ -674,7 +672,6 @@ map.addEventListener('pointerup',event=>{const tap=gesture?.kind==='pan'&&!gestu
 map.addEventListener('pointercancel',event=>{pointers.delete(event.pointerId);beginGesture();});
 map.addEventListener('wheel',event=>{event.preventDefault();zoom(Math.exp(Math.max(-100,Math.min(100,event.deltaY))*.002),{x:event.clientX,y:event.clientY});},{passive:false});
 $('#zoom-in').onclick=()=>zoom(.75); $('#zoom-out').onclick=()=>zoom(1/.75); $('#reset').onclick=()=>network&&fit({overview:true});
-$('#buses').onclick=()=>{buses=!buses;focus='all';line='all';selected=null;followed=null;closePanel(false);buildLineSelect();scope();updateControls();drawView(true);};
 $('#line-select').onchange=event=>chooseLine(event.target.value);
 $('#route-clear').onclick=()=>chooseLine('all');
 $('#labels').onclick=()=>{labels=!labels;attr($('#labels'),'aria-pressed',labels);attr($('#labels'),'aria-label',labels?'Hide station names':'Show station names');stationsDirty=true;layoutStations();renderCues();};
