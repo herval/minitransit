@@ -2,6 +2,20 @@
 
 A live Bay Area transit map inspired by Mini Metro. Includes BART, Caltrain, Muni rail, VTA light rail, San Francisco Bay Ferry, SMART and AC Transit. Public app: https://minitransit.fly.dev.
 
+## Screenshots
+
+**BART in day mode**
+
+![BART day map with colored routes, station names and live vehicles](docs/screenshots/bart-day.png)
+
+**Muni in night mode with live train details**
+
+![Muni night map showing a train’s reported occupancy and upcoming stops](docs/screenshots/muni-night.png)
+
+*Captured from the live app. Vehicle positions and service conditions change with the feed.*
+
+## Explore the map
+
 The map opens on BART around SF/Oakland and shows one transit network at a time. Choosing a network or route preserves the current map position and zoom; **Fit** shows the full selected network or route. Choose BART, Caltrain, Muni, VTA, Ferries, SMART or AC Transit from the network tabs. Names appear as you zoom. Tap a vehicle for its upcoming stops and platform details, or a stop for departures. Delay outlines, lateness badges, service-gap clocks, station filling, reported vehicle occupancy and a saved night mode are included.
 
 The bus overview bundles shared routes into muted corridors and shows a limited set of named transfer hubs. Bus markers are small dots; nearby buses form numbered groups. Select a group to choose an individual bus, or choose a route above the map. The selected route shows colored tracks, stop names, vehicle icons, delays and gap clocks over a faint network context. **← Overview** returns to the overview without moving the camera. Ordinary bus stops appear at neighborhood zoom; search can always reveal a specific stop. Stop circles have a fixed size limit.
